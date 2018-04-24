@@ -7,12 +7,15 @@ package io.strimzi.controller.cluster.operator.assembly;
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
 import io.fabric8.kubernetes.api.model.Container;
+import io.fabric8.kubernetes.api.model.Event;
 import io.fabric8.kubernetes.api.model.PersistentVolumeClaim;
 import io.fabric8.kubernetes.api.model.PersistentVolumeClaimBuilder;
 import io.fabric8.kubernetes.api.model.ResourceRequirements;
 import io.fabric8.kubernetes.api.model.Volume;
 import io.fabric8.kubernetes.api.model.extensions.StatefulSet;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientException;
+import io.fabric8.kubernetes.client.Watcher;
 import io.strimzi.controller.cluster.Reconciliation;
 import io.strimzi.controller.cluster.model.AssemblyType;
 import io.strimzi.controller.cluster.model.KafkaCluster;
@@ -23,6 +26,7 @@ import io.strimzi.controller.cluster.model.TopicController;
 import io.strimzi.controller.cluster.model.ZookeeperCluster;
 import io.strimzi.controller.cluster.operator.resource.ConfigMapOperator;
 import io.strimzi.controller.cluster.operator.resource.DeploymentOperator;
+import io.strimzi.controller.cluster.operator.resource.EventOperator;
 import io.strimzi.controller.cluster.operator.resource.KafkaSetOperator;
 import io.strimzi.controller.cluster.operator.resource.PvcOperator;
 import io.strimzi.controller.cluster.operator.resource.ServiceOperator;
@@ -100,9 +104,9 @@ public class KafkaAssemblyOperatorMockTest {
 
     @Parameterized.Parameters(name = "{0}")
     public static Iterable<KafkaAssemblyOperatorMockTest.Params> data() {
-        int[] replicas = {1, 3};
+        int[] replicas = {1/*, 3*/};
         JsonObject[] storageConfigs = {
-            new JsonObject("{\"type\": \"ephemeral\"}"),
+            new JsonObject("{\"type\": \"ephemeral\"}")/*,
 
             new JsonObject("{\"type\": \"persistent-claim\", " +
                     "\"size\": \"123\", " +
@@ -116,7 +120,7 @@ public class KafkaAssemblyOperatorMockTest {
 
             new JsonObject("{\"type\": \"local\", " +
                     "\"size\": \"123\", " +
-                    "\"class\": \"foo\"}")
+                    "\"class\": \"foo\"}")*/
         };
         String[] resources = {
             "{ \"limits\" : { \"cpu\": 5, \"memory\": 5000 }, \"requests\": { \"cpu\": 5, \"memory\": 5000 } }"
@@ -214,8 +218,9 @@ public class KafkaAssemblyOperatorMockTest {
         ZookeeperSetOperator zksops = new ZookeeperSetOperator(vertx, mockClient, 60_000L);
         DeploymentOperator depops = new DeploymentOperator(vertx, mockClient);
         PvcOperator pvcops = new PvcOperator(vertx, mockClient);
+        EventOperator eventops = new EventOperator(vertx, mockClient);
         KafkaAssemblyOperator kco = new KafkaAssemblyOperator(vertx, true, 2_000,
-                cmops, svcops, zksops, ksops, pvcops, depops);
+                cmops, svcops, zksops, ksops, pvcops, depops, eventops);
 
         LOGGER.info("Reconciling initially -> create");
         Async createAsync = context.async();
@@ -693,6 +698,42 @@ public class KafkaAssemblyOperatorMockTest {
                     deleteClaim(zkStorage) ? kafkaPvcs : allPvcs);
             deleteAsync.complete();
         });
+    }
+
+    /** Test that we can change the deleteClaim flag, and that it's honoured */
+    @Test
+    public void testUpdateKafkaWithInvalidCm(TestContext context) {
+        KafkaAssemblyOperator kco = createCluster(context);
+
+        context.assertEquals(0, mockClient.events().inNamespace(NAMESPACE).list().getItems().size());
+        cluster.getData().put(KafkaCluster.KEY_REPLICAS, "foo");
+        mockClient.configMaps().inNamespace(NAMESPACE).withName(CLUSTER_NAME).patch(cluster);
+
+        LOGGER.info("Updating with invalid replicas");
+        Async updateAsync = context.async(2);
+
+        mockClient.events().inNamespace(NAMESPACE).watch(new Watcher<Event>() {
+            @Override
+            public void eventReceived(Action action, Event event) {
+
+                //context.assertEquals(1, events.size());
+                //Event event = events.get(0);
+                context.assertEquals("Warning", event.getType());
+                context.assertEquals("", event.getMessage());
+                updateAsync.countDown();
+            }
+
+            @Override
+            public void onClose(KubernetesClientException cause) {
+
+            }
+        });
+
+        kco.reconcileAssembly(new Reconciliation("test-trigger", AssemblyType.KAFKA, NAMESPACE, CLUSTER_NAME), ar -> {
+            context.assertFalse(ar.succeeded());
+            updateAsync.countDown();
+        });
+        updateAsync.await();
     }
 
     /** Create a cluster from a Kafka Cluster CM */

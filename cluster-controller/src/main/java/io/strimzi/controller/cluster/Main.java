@@ -11,6 +11,7 @@ import io.fabric8.openshift.client.OpenShiftClient;
 import io.strimzi.controller.cluster.operator.assembly.KafkaAssemblyOperator;
 import io.strimzi.controller.cluster.operator.assembly.KafkaConnectAssemblyOperator;
 import io.strimzi.controller.cluster.operator.assembly.KafkaConnectS2IAssemblyOperator;
+import io.strimzi.controller.cluster.operator.resource.EventOperator;
 import io.strimzi.controller.cluster.operator.resource.KafkaSetOperator;
 import io.strimzi.controller.cluster.operator.resource.ZookeeperSetOperator;
 import io.strimzi.controller.cluster.operator.resource.BuildConfigOperator;
@@ -65,9 +66,10 @@ public class Main {
         ConfigMapOperator configMapOperations = new ConfigMapOperator(vertx, client);
         PvcOperator pvcOperations = new PvcOperator(vertx, client);
         DeploymentOperator deploymentOperations = new DeploymentOperator(vertx, client);
+        EventOperator eventOperations = new EventOperator(vertx, client);
 
-        KafkaAssemblyOperator kafkaClusterOperations = new KafkaAssemblyOperator(vertx, isOpenShift, config.getOperationTimeoutMs(), configMapOperations, serviceOperations, zookeeperSetOperations, kafkaSetOperations, pvcOperations, deploymentOperations);
-        KafkaConnectAssemblyOperator kafkaConnectClusterOperations = new KafkaConnectAssemblyOperator(vertx, isOpenShift, configMapOperations, deploymentOperations, serviceOperations);
+        KafkaAssemblyOperator kafkaClusterOperations = new KafkaAssemblyOperator(vertx, isOpenShift, config.getOperationTimeoutMs(), configMapOperations, serviceOperations, zookeeperSetOperations, kafkaSetOperations, pvcOperations, deploymentOperations, eventOperations);
+        KafkaConnectAssemblyOperator kafkaConnectClusterOperations = new KafkaConnectAssemblyOperator(vertx, isOpenShift, configMapOperations, deploymentOperations, serviceOperations, eventOperations);
 
         DeploymentConfigOperator deploymentConfigOperations = null;
         ImageStreamOperator imagesStreamOperations = null;
@@ -79,7 +81,7 @@ public class Main {
             deploymentConfigOperations = new DeploymentConfigOperator(vertx, client.adapt(OpenShiftClient.class));
             kafkaConnectS2IClusterOperations = new KafkaConnectS2IAssemblyOperator(vertx, isOpenShift,
                     configMapOperations, deploymentConfigOperations,
-                    serviceOperations, imagesStreamOperations, buildConfigOperations);
+                    serviceOperations, imagesStreamOperations, buildConfigOperations, eventOperations);
         }
 
         List<Future> futures = new ArrayList<>();

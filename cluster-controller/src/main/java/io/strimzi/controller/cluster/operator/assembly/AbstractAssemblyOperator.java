@@ -5,12 +5,14 @@
 package io.strimzi.controller.cluster.operator.assembly;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
+import io.fabric8.kubernetes.api.model.EventBuilder;
 import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.strimzi.controller.cluster.Reconciliation;
 import io.strimzi.controller.cluster.model.AssemblyType;
 import io.strimzi.controller.cluster.model.Labels;
 import io.strimzi.controller.cluster.operator.resource.ConfigMapOperator;
+import io.strimzi.controller.cluster.operator.resource.EventOperator;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -43,17 +45,20 @@ public abstract class AbstractAssemblyOperator {
     protected final boolean isOpenShift;
     protected final AssemblyType assemblyType;
     protected final ConfigMapOperator configMapOperations;
+    protected final EventOperator eventOperations;
 
     /**
      * @param vertx The Vertx instance
      * @param isOpenShift True iff running on OpenShift
      */
     protected AbstractAssemblyOperator(Vertx vertx, boolean isOpenShift, AssemblyType assemblyType,
-                                       ConfigMapOperator configMapOperations) {
+                                       ConfigMapOperator configMapOperations,
+                                       EventOperator eventOperations) {
         this.vertx = vertx;
         this.isOpenShift = isOpenShift;
         this.assemblyType = assemblyType;
         this.configMapOperations = configMapOperations;
+        this.eventOperations = eventOperations;
     }
 
     /**
@@ -202,5 +207,29 @@ public abstract class AbstractAssemblyOperator {
      * @return The matching resources.
      */
     protected abstract List<HasMetadata> getResources(String namespace);
+
+    protected void createEventForModelError(ConfigMap assemblyCm) {
+        String namespace = assemblyCm.getMetadata().getNamespace();
+        String name = assemblyCm.getMetadata().getName();
+        eventOperations.createOrUpdate(new EventBuilder().withNewMetadata()
+                .withName("ff")
+                .withNamespace(namespace)
+                .endMetadata()
+                .withNewInvolvedObject()
+                .withKind(assemblyCm.getKind())
+                .withName(name)
+                .withNamespace(namespace)
+                .withUid(assemblyCm.getMetadata().getUid())
+                .withResourceVersion(assemblyCm.getMetadata().getResourceVersion())
+                //.withFieldPath(".data")
+                .endInvolvedObject()
+                .withMessage("Invalid ConfigMap " + namespace + "/" + name)
+                .withType("Warning")
+                .withNewSource()
+                .withComponent("cluster-controller")
+                .endSource()
+                .build());
+    }
+
 
 }

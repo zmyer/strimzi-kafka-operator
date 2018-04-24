@@ -11,17 +11,18 @@ import io.fabric8.kubernetes.api.model.extensions.Deployment;
 import io.fabric8.kubernetes.api.model.extensions.StatefulSet;
 import io.strimzi.controller.cluster.Reconciliation;
 import io.strimzi.controller.cluster.model.AssemblyType;
-import io.strimzi.controller.cluster.operator.resource.ConfigMapOperator;
-import io.strimzi.controller.cluster.operator.resource.DeploymentOperator;
-import io.strimzi.controller.cluster.operator.resource.KafkaSetOperator;
-import io.strimzi.controller.cluster.operator.resource.PvcOperator;
-import io.strimzi.controller.cluster.operator.resource.ReconcileResult;
-import io.strimzi.controller.cluster.operator.resource.ServiceOperator;
 import io.strimzi.controller.cluster.model.KafkaCluster;
 import io.strimzi.controller.cluster.model.Labels;
 import io.strimzi.controller.cluster.model.Storage;
 import io.strimzi.controller.cluster.model.TopicController;
 import io.strimzi.controller.cluster.model.ZookeeperCluster;
+import io.strimzi.controller.cluster.operator.resource.ConfigMapOperator;
+import io.strimzi.controller.cluster.operator.resource.DeploymentOperator;
+import io.strimzi.controller.cluster.operator.resource.EventOperator;
+import io.strimzi.controller.cluster.operator.resource.KafkaSetOperator;
+import io.strimzi.controller.cluster.operator.resource.PvcOperator;
+import io.strimzi.controller.cluster.operator.resource.ReconcileResult;
+import io.strimzi.controller.cluster.operator.resource.ServiceOperator;
 import io.strimzi.controller.cluster.operator.resource.ZookeeperSetOperator;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.CompositeFuture;
@@ -71,8 +72,9 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator {
                                  ZookeeperSetOperator zkSetOperations,
                                  KafkaSetOperator kafkaSetOperations,
                                  PvcOperator pvcOperations,
-                                 DeploymentOperator deploymentOperations) {
-        super(vertx, isOpenShift, AssemblyType.KAFKA, configMapOperations);
+                                 DeploymentOperator deploymentOperations,
+                                 EventOperator eventOperations) {
+        super(vertx, isOpenShift, AssemblyType.KAFKA, configMapOperations, eventOperations);
         this.operationTimeoutMs = operationTimeoutMs;
         this.zkSetOperations = zkSetOperations;
         this.serviceOperations = serviceOperations;
@@ -94,7 +96,13 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator {
         String namespace = assemblyCm.getMetadata().getNamespace();
         String name = assemblyCm.getMetadata().getName();
         log.debug("{}: create/update kafka {}", reconciliation, name);
-        KafkaCluster kafka = KafkaCluster.fromConfigMap(assemblyCm);
+        KafkaCluster kafka;
+        try {
+            kafka = KafkaCluster.fromConfigMap(assemblyCm);
+        } catch (Exception e) {
+            createEventForModelError(assemblyCm);
+            return Future.failedFuture(e);
+        }
         Service service = kafka.generateService();
         Service headlessService = kafka.generateHeadlessService();
         ConfigMap metricsConfigMap = kafka.generateMetricsConfigMap();
@@ -152,7 +160,13 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator {
         String namespace = assemblyCm.getMetadata().getNamespace();
         String name = assemblyCm.getMetadata().getName();
         log.debug("{}: create/update zookeeper {}", reconciliation, name);
-        ZookeeperCluster zk = ZookeeperCluster.fromConfigMap(assemblyCm);
+        ZookeeperCluster zk;
+        try {
+            zk = ZookeeperCluster.fromConfigMap(assemblyCm);
+        } catch (Exception e) {
+            createEventForModelError(assemblyCm);
+            return Future.failedFuture(e);
+        }
         Service service = zk.generateService();
         Service headlessService = zk.generateHeadlessService();
         Future<Void> chainFuture = Future.future();
@@ -175,7 +189,7 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator {
                 .compose(i -> serviceOperations.endpointReadiness(namespace, headlessService, 1_000, operationTimeoutMs))
                 .compose(chainFuture::complete, chainFuture);
         return chainFuture;
-    };
+    }
 
     private final Future<CompositeFuture> deleteZk(Reconciliation reconciliation) {
         String namespace = reconciliation.namespace();
@@ -205,7 +219,13 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator {
         String namespace = assemblyCm.getMetadata().getNamespace();
         String name = assemblyCm.getMetadata().getName();
         log.debug("{}: create/update topic controller {}", reconciliation, name);
-        TopicController topicController = TopicController.fromConfigMap(assemblyCm);
+        TopicController topicController;
+        try {
+            topicController = TopicController.fromConfigMap(assemblyCm);
+        } catch (Exception e) {
+            createEventForModelError(assemblyCm);
+            return Future.failedFuture(e);
+        }
         Deployment deployment = topicController != null ? topicController.generateDeployment() : null;
         return deploymentOperations.reconcile(namespace, topicControllerName(name), deployment);
     };

@@ -13,6 +13,7 @@ import io.strimzi.controller.cluster.model.Labels;
 import io.strimzi.controller.cluster.operator.resource.BuildConfigOperator;
 import io.strimzi.controller.cluster.operator.resource.ConfigMapOperator;
 import io.strimzi.controller.cluster.operator.resource.DeploymentConfigOperator;
+import io.strimzi.controller.cluster.operator.resource.EventOperator;
 import io.strimzi.controller.cluster.operator.resource.ImageStreamOperator;
 import io.strimzi.controller.cluster.operator.resource.ServiceOperator;
 import io.vertx.core.AsyncResult;
@@ -56,8 +57,9 @@ public class KafkaConnectS2IAssemblyOperator extends AbstractAssemblyOperator {
                                            DeploymentConfigOperator deploymentConfigOperations,
                                            ServiceOperator serviceOperations,
                                            ImageStreamOperator imagesStreamOperations,
-                                           BuildConfigOperator buildConfigOperations) {
-        super(vertx, isOpenShift, AssemblyType.CONNECT_S2I, configMapOperations);
+                                           BuildConfigOperator buildConfigOperations,
+                                           EventOperator eventOperations) {
+        super(vertx, isOpenShift, AssemblyType.CONNECT_S2I, configMapOperations, eventOperations);
         this.serviceOperations = serviceOperations;
         this.deploymentConfigOperations = deploymentConfigOperations;
         this.imagesStreamOperations = imagesStreamOperations;
@@ -68,7 +70,14 @@ public class KafkaConnectS2IAssemblyOperator extends AbstractAssemblyOperator {
     public void createOrUpdate(Reconciliation reconciliation, ConfigMap assemblyCm, Handler<AsyncResult<Void>> handler) {
         String namespace = reconciliation.namespace();
         if (isOpenShift) {
-            KafkaConnectS2ICluster connect = KafkaConnectS2ICluster.fromConfigMap(assemblyCm);
+            KafkaConnectS2ICluster connect;
+            try {
+                connect = KafkaConnectS2ICluster.fromConfigMap(assemblyCm);
+            } catch (Exception e) {
+                createEventForModelError(assemblyCm);
+                handler.handle(Future.failedFuture(e));
+                return;
+            }
             Future<Void> chainFuture = Future.future();
 
             deploymentConfigOperations.scaleDown(namespace, connect.getName(), connect.getReplicas())

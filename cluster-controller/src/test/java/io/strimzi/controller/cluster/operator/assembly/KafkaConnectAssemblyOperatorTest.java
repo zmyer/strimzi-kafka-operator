@@ -12,6 +12,7 @@ import io.strimzi.controller.cluster.ResourceUtils;
 import io.strimzi.controller.cluster.model.AssemblyType;
 import io.strimzi.controller.cluster.operator.resource.ConfigMapOperator;
 import io.strimzi.controller.cluster.operator.resource.DeploymentOperator;
+import io.strimzi.controller.cluster.operator.resource.EventOperator;
 import io.strimzi.controller.cluster.operator.resource.ServiceOperator;
 import io.strimzi.controller.cluster.model.KafkaConnectCluster;
 import io.strimzi.controller.cluster.model.Labels;
@@ -63,6 +64,7 @@ public class KafkaConnectAssemblyOperatorTest {
         ConfigMapOperator mockCmOps = mock(ConfigMapOperator.class);
         ServiceOperator mockServiceOps = mock(ServiceOperator.class);
         DeploymentOperator mockDcOps = mock(DeploymentOperator.class);
+        EventOperator mockEventOps = mock(EventOperator.class);
 
         String clusterCmName = "foo";
         String clusterCmNamespace = "test";
@@ -79,7 +81,7 @@ public class KafkaConnectAssemblyOperatorTest {
         when(mockDcOps.scaleDown(anyString(), anyString(), anyInt())).thenReturn(Future.succeededFuture(42));
 
         KafkaConnectAssemblyOperator ops = new KafkaConnectAssemblyOperator(vertx, true,
-                mockCmOps, mockDcOps, mockServiceOps);
+                mockCmOps, mockDcOps, mockServiceOps, mockEventOps);
 
         KafkaConnectCluster connect = KafkaConnectCluster.fromConfigMap(clusterCm);
 
@@ -110,6 +112,7 @@ public class KafkaConnectAssemblyOperatorTest {
         ConfigMapOperator mockCmOps = mock(ConfigMapOperator.class);
         ServiceOperator mockServiceOps = mock(ServiceOperator.class);
         DeploymentOperator mockDcOps = mock(DeploymentOperator.class);
+        EventOperator mockEventOps = mock(EventOperator.class);
 
         String clusterCmName = "foo";
         String clusterCmNamespace = "test";
@@ -137,7 +140,7 @@ public class KafkaConnectAssemblyOperatorTest {
         when(mockDcOps.scaleDown(eq(clusterCmNamespace), dcScaleDownNameCaptor.capture(), dcScaleDownReplicasCaptor.capture())).thenReturn(Future.succeededFuture());
 
         KafkaConnectAssemblyOperator ops = new KafkaConnectAssemblyOperator(vertx, true,
-                mockCmOps, mockDcOps, mockServiceOps);
+                mockCmOps, mockDcOps, mockServiceOps, mockEventOps);
 
         Async async = context.async();
         ops.createOrUpdate(new Reconciliation("test-trigger", AssemblyType.CONNECT, clusterCmNamespace, clusterCmName), clusterCm, createResult -> {
@@ -164,6 +167,7 @@ public class KafkaConnectAssemblyOperatorTest {
         ConfigMapOperator mockCmOps = mock(ConfigMapOperator.class);
         ServiceOperator mockServiceOps = mock(ServiceOperator.class);
         DeploymentOperator mockDcOps = mock(DeploymentOperator.class);
+        EventOperator mockEventOps = mock(EventOperator.class);
 
         String clusterCmName = "foo";
         String clusterCmNamespace = "test";
@@ -193,7 +197,7 @@ public class KafkaConnectAssemblyOperatorTest {
         when(mockDcOps.scaleDown(eq(clusterCmNamespace), dcScaleDownNameCaptor.capture(), dcScaleDownReplicasCaptor.capture())).thenReturn(Future.succeededFuture());
 
         KafkaConnectAssemblyOperator ops = new KafkaConnectAssemblyOperator(vertx, true,
-                mockCmOps, mockDcOps, mockServiceOps);
+                mockCmOps, mockDcOps, mockServiceOps, mockEventOps);
 
         Async async = context.async();
         ops.createOrUpdate(new Reconciliation("test-trigger", AssemblyType.CONNECT, clusterCmNamespace, clusterCmName), clusterCm, createResult -> {
@@ -228,6 +232,7 @@ public class KafkaConnectAssemblyOperatorTest {
         ConfigMapOperator mockCmOps = mock(ConfigMapOperator.class);
         ServiceOperator mockServiceOps = mock(ServiceOperator.class);
         DeploymentOperator mockDcOps = mock(DeploymentOperator.class);
+        EventOperator mockEventOps = mock(EventOperator.class);
 
         String clusterCmName = "foo";
         String clusterCmNamespace = "test";
@@ -261,7 +266,7 @@ public class KafkaConnectAssemblyOperatorTest {
         when(mockDcOps.scaleDown(dcScaleDownNamespaceCaptor.capture(), dcScaleDownNameCaptor.capture(), dcScaleDownReplicasCaptor.capture())).thenReturn(Future.succeededFuture());
 
         KafkaConnectAssemblyOperator ops = new KafkaConnectAssemblyOperator(vertx, true,
-                mockCmOps, mockDcOps, mockServiceOps);
+                mockCmOps, mockDcOps, mockServiceOps, mockEventOps);
 
         Async async = context.async();
         ops.createOrUpdate(new Reconciliation("test-trigger", AssemblyType.CONNECT, clusterCmNamespace, clusterCmName), clusterCm, createResult -> {
@@ -279,6 +284,7 @@ public class KafkaConnectAssemblyOperatorTest {
         ConfigMapOperator mockCmOps = mock(ConfigMapOperator.class);
         ServiceOperator mockServiceOps = mock(ServiceOperator.class);
         DeploymentOperator mockDcOps = mock(DeploymentOperator.class);
+        EventOperator mockEventOps = mock(EventOperator.class);
 
         String clusterCmName = "foo";
         String clusterCmNamespace = "test";
@@ -302,7 +308,7 @@ public class KafkaConnectAssemblyOperatorTest {
                 .when(mockDcOps).scaleDown(clusterCmNamespace, connect.getName(), scaleTo);
 
         KafkaConnectAssemblyOperator ops = new KafkaConnectAssemblyOperator(vertx, true,
-                mockCmOps, mockDcOps, mockServiceOps);
+                mockCmOps, mockDcOps, mockServiceOps, mockEventOps);
 
         Async async = context.async();
         ops.createOrUpdate(new Reconciliation("test-trigger", AssemblyType.CONNECT, clusterCmNamespace, clusterCmName), clusterCm, createResult -> {
@@ -322,6 +328,7 @@ public class KafkaConnectAssemblyOperatorTest {
         ConfigMapOperator mockCmOps = mock(ConfigMapOperator.class);
         ServiceOperator mockServiceOps = mock(ServiceOperator.class);
         DeploymentOperator mockDcOps = mock(DeploymentOperator.class);
+        EventOperator mockEventOps = mock(EventOperator.class);
 
         String clusterCmName = "foo";
         String clusterCmNamespace = "test";
@@ -345,7 +352,7 @@ public class KafkaConnectAssemblyOperatorTest {
                 .when(mockDcOps).scaleDown(clusterCmNamespace, connect.getName(), scaleTo);
 
         KafkaConnectAssemblyOperator ops = new KafkaConnectAssemblyOperator(vertx, true,
-                mockCmOps, mockDcOps, mockServiceOps);
+                mockCmOps, mockDcOps, mockServiceOps, mockEventOps);
 
         Async async = context.async();
         ops.createOrUpdate(new Reconciliation("test-trigger", AssemblyType.CONNECT, clusterCmNamespace, clusterCmName), clusterCm, createResult -> {
@@ -362,6 +369,7 @@ public class KafkaConnectAssemblyOperatorTest {
         ConfigMapOperator mockCmOps = mock(ConfigMapOperator.class);
         ServiceOperator mockServiceOps = mock(ServiceOperator.class);
         DeploymentOperator mockDcOps = mock(DeploymentOperator.class);
+        EventOperator mockEventOps = mock(EventOperator.class);
 
         String clusterCmName = "foo";
         String clusterCmNamespace = "test";
@@ -379,7 +387,7 @@ public class KafkaConnectAssemblyOperatorTest {
         when(mockDcOps.reconcile(dcNamespaceCaptor.capture(), dcNameCaptor.capture(), isNull())).thenReturn(Future.succeededFuture());
 
         KafkaConnectAssemblyOperator ops = new KafkaConnectAssemblyOperator(vertx, true,
-                mockCmOps, mockDcOps, mockServiceOps);
+                mockCmOps, mockDcOps, mockServiceOps, mockEventOps);
 
         Async async = context.async();
         ops.delete(new Reconciliation("test-trigger", AssemblyType.CONNECT, clusterCmNamespace, clusterCmName), createResult -> {
@@ -404,7 +412,7 @@ public class KafkaConnectAssemblyOperatorTest {
         ConfigMapOperator mockCmOps = mock(ConfigMapOperator.class);
         ServiceOperator mockServiceOps = mock(ServiceOperator.class);
         DeploymentOperator mockDcOps = mock(DeploymentOperator.class);
-
+        EventOperator mockEventOps = mock(EventOperator.class);
 
         String clusterCmNamespace = "test";
 
@@ -438,7 +446,7 @@ public class KafkaConnectAssemblyOperatorTest {
 
         Async async = context.async(3);
         KafkaConnectAssemblyOperator ops = new KafkaConnectAssemblyOperator(vertx, true,
-                mockCmOps, mockDcOps, mockServiceOps) {
+                mockCmOps, mockDcOps, mockServiceOps, mockEventOps) {
 
             @Override
             public void createOrUpdate(Reconciliation reconciliation, ConfigMap assemblyCm, Handler h) {

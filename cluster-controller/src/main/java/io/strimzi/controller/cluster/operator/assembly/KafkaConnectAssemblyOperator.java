@@ -12,6 +12,7 @@ import io.strimzi.controller.cluster.model.KafkaConnectCluster;
 import io.strimzi.controller.cluster.model.Labels;
 import io.strimzi.controller.cluster.operator.resource.ConfigMapOperator;
 import io.strimzi.controller.cluster.operator.resource.DeploymentOperator;
+import io.strimzi.controller.cluster.operator.resource.EventOperator;
 import io.strimzi.controller.cluster.operator.resource.ServiceOperator;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.CompositeFuture;
@@ -46,8 +47,9 @@ public class KafkaConnectAssemblyOperator extends AbstractAssemblyOperator {
     public KafkaConnectAssemblyOperator(Vertx vertx, boolean isOpenShift,
                                         ConfigMapOperator configMapOperations,
                                         DeploymentOperator deploymentOperations,
-                                        ServiceOperator serviceOperations) {
-        super(vertx, isOpenShift, AssemblyType.CONNECT, configMapOperations);
+                                        ServiceOperator serviceOperations,
+                                        EventOperator eventOperations) {
+        super(vertx, isOpenShift, AssemblyType.CONNECT, configMapOperations, eventOperations);
         this.serviceOperations = serviceOperations;
         this.deploymentOperations = deploymentOperations;
     }
@@ -57,7 +59,14 @@ public class KafkaConnectAssemblyOperator extends AbstractAssemblyOperator {
 
         String namespace = reconciliation.namespace();
         String name = reconciliation.assemblyName();
-        KafkaConnectCluster connect = KafkaConnectCluster.fromConfigMap(assemblyCm);
+        KafkaConnectCluster connect;
+        try {
+            connect = KafkaConnectCluster.fromConfigMap(assemblyCm);
+        } catch (Exception e) {
+            createEventForModelError(assemblyCm);
+            handler.handle(Future.failedFuture(e));
+            return;
+        }
         log.debug("{}: Updating Kafka Connect cluster", reconciliation, name, namespace);
         Future<Void> chainFuture = Future.future();
         deploymentOperations.scaleDown(namespace, connect.getName(), connect.getReplicas())

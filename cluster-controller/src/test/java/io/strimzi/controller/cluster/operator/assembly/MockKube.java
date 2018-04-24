@@ -9,11 +9,14 @@ import io.fabric8.kubernetes.api.model.ConfigMapList;
 import io.fabric8.kubernetes.api.model.Doneable;
 import io.fabric8.kubernetes.api.model.DoneableConfigMap;
 import io.fabric8.kubernetes.api.model.DoneableEndpoints;
+import io.fabric8.kubernetes.api.model.DoneableEvent;
 import io.fabric8.kubernetes.api.model.DoneablePersistentVolumeClaim;
 import io.fabric8.kubernetes.api.model.DoneablePod;
 import io.fabric8.kubernetes.api.model.DoneableService;
 import io.fabric8.kubernetes.api.model.Endpoints;
 import io.fabric8.kubernetes.api.model.EndpointsList;
+import io.fabric8.kubernetes.api.model.Event;
+import io.fabric8.kubernetes.api.model.EventList;
 import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.api.model.KubernetesResource;
 import io.fabric8.kubernetes.api.model.KubernetesResourceList;
@@ -69,6 +72,8 @@ public class MockKube {
 
     private final Map<String, ConfigMap> cmDb = db(emptySet(), ConfigMap.class, DoneableConfigMap.class);
     private final Collection<Watcher<ConfigMap>> cmWatchers = new ArrayList();
+    private final Map<String, Event> eventDb = db(emptySet(), Event.class, DoneableEvent.class);
+    private final Collection<Watcher<Event>> eventWatchers = new ArrayList();
     private final Map<String, PersistentVolumeClaim> pvcDb = db(emptySet(), PersistentVolumeClaim.class, DoneablePersistentVolumeClaim.class);
     private final Map<String, Service> svcDb = db(emptySet(), Service.class, DoneableService.class);
     private final Map<String, Endpoints> endpointDb = db(emptySet(), Endpoints.class, DoneableEndpoints.class);
@@ -91,8 +96,10 @@ public class MockKube {
         MixedOperation<Pod, PodList, DoneablePod, PodResource<Pod, DoneablePod>> mockPods = buildPods();
         MixedOperation<StatefulSet, StatefulSetList, DoneableStatefulSet, RollableScalableResource<StatefulSet, DoneableStatefulSet>> mockSs = buildStatefulSets(mockPods);
         MixedOperation<Deployment, DeploymentList, DoneableDeployment, ScalableResource<Deployment, DoneableDeployment>> mockDep = buildDeployments();
+        MixedOperation<Event, EventList, DoneableEvent, Resource<Event, DoneableEvent>> mockEvents = buildEvents();
 
         when(mockClient.configMaps()).thenReturn(mockCms);
+        when(mockClient.events()).thenReturn(mockEvents);
 
         when(mockClient.services()).thenReturn(mockSvc);
         AppsAPIGroupDSL api = mock(AppsAPIGroupDSL.class);
@@ -297,6 +304,21 @@ public class MockKube {
             ConfigMap.class, ConfigMapList.class, DoneableConfigMap.class, castClass(Resource.class), cmDb) {
             @Override
             protected void nameScopedMocks(Resource<ConfigMap, DoneableConfigMap> resource, String resourceName) {
+                mockGet(resourceName, resource);
+                mockWatch(resource);
+                mockCreate(resourceName, resource);
+                mockCascading(resource);
+                mockPatch(resourceName, resource);
+                mockDelete(resourceName, resource);
+            }
+        }.build();
+    }
+
+    private MixedOperation<Event, EventList, DoneableEvent, Resource<Event, DoneableEvent>> buildEvents() {
+        return new AbstractMockBuilder<Event, EventList, DoneableEvent, Resource<Event, DoneableEvent>>(
+                Event.class, EventList.class, DoneableEvent.class, castClass(Resource.class), eventDb) {
+            @Override
+            protected void nameScopedMocks(Resource<Event, DoneableEvent> resource, String resourceName) {
                 mockGet(resourceName, resource);
                 mockWatch(resource);
                 mockCreate(resourceName, resource);
