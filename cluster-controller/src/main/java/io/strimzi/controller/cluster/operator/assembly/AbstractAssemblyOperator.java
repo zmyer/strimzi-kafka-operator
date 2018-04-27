@@ -211,22 +211,23 @@ public abstract class AbstractAssemblyOperator {
     protected void createEventForModelError(ConfigMap assemblyCm) {
         String namespace = assemblyCm.getMetadata().getNamespace();
         String name = assemblyCm.getMetadata().getName();
-        eventOperations.createOrUpdate(new EventBuilder().withNewMetadata()
-                .withName("ff")
-                .withNamespace(namespace)
+        eventOperations.createOrUpdate(new EventBuilder()
+                .withNewMetadata()
+                    .withName("ff")
+                    .withNamespace(namespace)
                 .endMetadata()
                 .withNewInvolvedObject()
-                .withKind(assemblyCm.getKind())
-                .withName(name)
-                .withNamespace(namespace)
-                .withUid(assemblyCm.getMetadata().getUid())
-                .withResourceVersion(assemblyCm.getMetadata().getResourceVersion())
-                //.withFieldPath(".data")
+                    .withKind(assemblyCm.getKind())
+                    .withName(name)
+                    .withNamespace(namespace)
+                    .withUid(assemblyCm.getMetadata().getUid())
+                    .withResourceVersion(assemblyCm.getMetadata().getResourceVersion())
+                    //.withFieldPath(".data")
                 .endInvolvedObject()
                 .withMessage("Invalid ConfigMap " + namespace + "/" + name)
                 .withType("Warning")
                 .withNewSource()
-                .withComponent("cluster-controller")
+                    .withComponent("cluster-controller")
                 .endSource()
                 .build());
     }
