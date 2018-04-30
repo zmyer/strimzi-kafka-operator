@@ -45,6 +45,7 @@ import io.fabric8.kubernetes.client.dsl.PodResource;
 import io.fabric8.kubernetes.client.dsl.Resource;
 import io.fabric8.kubernetes.client.dsl.RollableScalableResource;
 import io.fabric8.kubernetes.client.dsl.ScalableResource;
+import io.fabric8.kubernetes.client.dsl.Watchable;
 import org.mockito.stubbing.OngoingStubbing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,7 +53,6 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -71,14 +71,11 @@ public class MockKube {
     private static final Logger LOGGER = LoggerFactory.getLogger(MockKube.class);
 
     private final Map<String, ConfigMap> cmDb = db(emptySet(), ConfigMap.class, DoneableConfigMap.class);
-    private final Collection<Watcher<ConfigMap>> cmWatchers = new ArrayList();
     private final Map<String, Event> eventDb = db(emptySet(), Event.class, DoneableEvent.class);
-    private final Collection<Watcher<Event>> eventWatchers = new ArrayList();
     private final Map<String, PersistentVolumeClaim> pvcDb = db(emptySet(), PersistentVolumeClaim.class, DoneablePersistentVolumeClaim.class);
     private final Map<String, Service> svcDb = db(emptySet(), Service.class, DoneableService.class);
     private final Map<String, Endpoints> endpointDb = db(emptySet(), Endpoints.class, DoneableEndpoints.class);
     private final Map<String, Pod> podDb = db(emptySet(), Pod.class, DoneablePod.class);
-    private final Collection<Watcher<Pod>> podWatchers = new HashSet<>();
     private final Map<String, StatefulSet> ssDb = db(emptySet(), StatefulSet.class, DoneableStatefulSet.class);
     private final Map<String, Deployment> depDb = db(emptySet(), Deployment.class, DoneableDeployment.class);
 
@@ -90,13 +87,13 @@ public class MockKube {
     public KubernetesClient build() {
         KubernetesClient mockClient = mock(KubernetesClient.class);
         MixedOperation<ConfigMap, ConfigMapList, DoneableConfigMap, Resource<ConfigMap, DoneableConfigMap>> mockCms = buildConfigMaps();
+        MixedOperation<Event, EventList, DoneableEvent, Resource<Event, DoneableEvent>> mockEvents = buildEvents();
         MixedOperation<PersistentVolumeClaim, PersistentVolumeClaimList, DoneablePersistentVolumeClaim, Resource<PersistentVolumeClaim, DoneablePersistentVolumeClaim>> mockPvcs = buildPvcs();
         MixedOperation<Endpoints, EndpointsList, DoneableEndpoints, Resource<Endpoints, DoneableEndpoints>> mockEndpoints = buildEndpoints();
         MixedOperation<Service, ServiceList, DoneableService, Resource<Service, DoneableService>> mockSvc = buildServices();
         MixedOperation<Pod, PodList, DoneablePod, PodResource<Pod, DoneablePod>> mockPods = buildPods();
         MixedOperation<StatefulSet, StatefulSetList, DoneableStatefulSet, RollableScalableResource<StatefulSet, DoneableStatefulSet>> mockSs = buildStatefulSets(mockPods);
         MixedOperation<Deployment, DeploymentList, DoneableDeployment, ScalableResource<Deployment, DoneableDeployment>> mockDep = buildDeployments();
-        MixedOperation<Event, EventList, DoneableEvent, Resource<Event, DoneableEvent>> mockEvents = buildEvents();
 
         when(mockClient.configMaps()).thenReturn(mockCms);
         when(mockClient.events()).thenReturn(mockEvents);
@@ -320,7 +317,6 @@ public class MockKube {
             @Override
             protected void nameScopedMocks(Resource<Event, DoneableEvent> resource, String resourceName) {
                 mockGet(resourceName, resource);
-                mockWatch(resource);
                 mockCreate(resourceName, resource);
                 mockCascading(resource);
                 mockPatch(resourceName, resource);
@@ -398,6 +394,7 @@ public class MockKube {
             MixedOperation<CM, CML, DCM, R> mixed = mock(MixedOperation.class);
 
             when(mixed.inNamespace(any())).thenReturn(mixed);
+            mockWatch(mixed);
             when(mixed.list()).thenAnswer(i -> mockList(p -> true));
             when(mixed.withLabels(any())).thenAnswer(i -> {
                 MixedOperation<CM, CML, DCM, R> mixedWithLabels = mock(MixedOperation.class);
@@ -483,8 +480,8 @@ public class MockKube {
             when(resource.cascading(true)).thenReturn(c);
         }
 
-        protected void mockWatch(R resource) {
-            when(resource.watch(any())).thenAnswer(i -> {
+        protected void mockWatch(Watchable watchable) {
+            when(watchable.watch(any())).thenAnswer(i -> {
                 Watcher<CM> argument = (Watcher<CM>) i.getArguments()[0];
                 LOGGER.debug("watch {} {} ", resourceType, argument);
                 watchers.add(argument);

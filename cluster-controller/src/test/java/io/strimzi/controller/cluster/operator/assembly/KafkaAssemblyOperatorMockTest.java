@@ -104,9 +104,9 @@ public class KafkaAssemblyOperatorMockTest {
 
     @Parameterized.Parameters(name = "{0}")
     public static Iterable<KafkaAssemblyOperatorMockTest.Params> data() {
-        int[] replicas = {1/*, 3*/};
+        int[] replicas = {1, 3};
         JsonObject[] storageConfigs = {
-            new JsonObject("{\"type\": \"ephemeral\"}")/*,
+            new JsonObject("{\"type\": \"ephemeral\"}"),
 
             new JsonObject("{\"type\": \"persistent-claim\", " +
                     "\"size\": \"123\", " +
@@ -120,7 +120,7 @@ public class KafkaAssemblyOperatorMockTest {
 
             new JsonObject("{\"type\": \"local\", " +
                     "\"size\": \"123\", " +
-                    "\"class\": \"foo\"}")*/
+                    "\"class\": \"foo\"}")
         };
         String[] resources = {
             "{ \"limits\" : { \"cpu\": 5, \"memory\": 5000 }, \"requests\": { \"cpu\": 5, \"memory\": 5000 } }"
@@ -700,7 +700,7 @@ public class KafkaAssemblyOperatorMockTest {
         });
     }
 
-    /** Test that we can change the deleteClaim flag, and that it's honoured */
+    /** Test that modifying a cluster cm with invalid key produces a sensible Warning event */
     @Test
     public void testUpdateKafkaWithInvalidCm(TestContext context) {
         KafkaAssemblyOperator kco = createCluster(context);
@@ -715,11 +715,8 @@ public class KafkaAssemblyOperatorMockTest {
         mockClient.events().inNamespace(NAMESPACE).watch(new Watcher<Event>() {
             @Override
             public void eventReceived(Action action, Event event) {
-
-                //context.assertEquals(1, events.size());
-                //Event event = events.get(0);
                 context.assertEquals("Warning", event.getType());
-                context.assertEquals("", event.getMessage());
+                context.assertEquals("Invalid ConfigMap my-namespace/my-cluster", event.getMessage());
                 updateAsync.countDown();
             }
 
@@ -731,9 +728,10 @@ public class KafkaAssemblyOperatorMockTest {
 
         kco.reconcileAssembly(new Reconciliation("test-trigger", AssemblyType.KAFKA, NAMESPACE, CLUSTER_NAME), ar -> {
             context.assertFalse(ar.succeeded());
+            context.assertEquals("For input string: \"foo\"", ar.cause().getMessage());
             updateAsync.countDown();
         });
-        updateAsync.await();
+
     }
 
     /** Create a cluster from a Kafka Cluster CM */
