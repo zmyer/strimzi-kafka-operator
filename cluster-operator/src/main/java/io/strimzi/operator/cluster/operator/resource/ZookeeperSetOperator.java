@@ -6,7 +6,13 @@ package io.strimzi.operator.cluster.operator.resource;
 
 import io.fabric8.kubernetes.api.model.extensions.StatefulSet;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.vertx.core.CompositeFuture;
+import io.vertx.core.Future;
 import io.vertx.core.Vertx;
+
+import java.util.ArrayList;
+import java.util.List;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -17,6 +23,7 @@ import org.apache.logging.log4j.Logger;
 public class ZookeeperSetOperator extends StatefulSetOperator {
 
     private static final Logger log = LogManager.getLogger(ZookeeperSetOperator.class);
+    public final PodOperator podOperations;
 
     /**
      * Constructor
@@ -24,8 +31,9 @@ public class ZookeeperSetOperator extends StatefulSetOperator {
      * @param vertx  The Vertx instance
      * @param client The Kubernetes client
      */
-    public ZookeeperSetOperator(Vertx vertx, KubernetesClient client, long operationTimeoutMs) {
-        super(vertx, client, operationTimeoutMs);
+    public ZookeeperSetOperator(Vertx vertx, KubernetesClient client, long operationTimeoutMs, PodOperator podOperator) {
+        super(vertx, client, operationTimeoutMs, podOperator);
+        this.podOperations = podOperator;
     }
 
     @Override
@@ -53,5 +61,19 @@ public class ZookeeperSetOperator extends StatefulSetOperator {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Returns a future that completes when all the pods [0..replicas-1] in the given statefulSet are ready.
+     */
+    public Future<?> podReadiness(String namespace, StatefulSet desired, long pollInterval, long operationTimeoutMs, int replicas) {
+        //final int replicas = desired.getSpec().getReplicas();
+        List<Future> waitPodResult = new ArrayList<>(replicas);
+
+        for (int i = 0; i < replicas; i++) {
+            String podName = getPodName(desired, i);
+            waitPodResult.add(podOperations.readiness(namespace, podName, pollInterval, operationTimeoutMs));
+        }
+        return CompositeFuture.join(waitPodResult);
     }
 }

@@ -31,6 +31,7 @@ import io.strimzi.operator.cluster.operator.resource.DeploymentOperator;
 import io.strimzi.operator.cluster.operator.resource.ImageStreamOperator;
 import io.strimzi.operator.cluster.operator.resource.KafkaSetOperator;
 import io.strimzi.operator.cluster.operator.resource.PvcOperator;
+import io.strimzi.operator.cluster.operator.resource.PodOperator;
 import io.strimzi.operator.cluster.operator.resource.SecretOperator;
 import io.strimzi.operator.cluster.operator.resource.ServiceOperator;
 import io.strimzi.operator.cluster.operator.resource.ZookeeperSetOperator;
@@ -84,7 +85,9 @@ public class Main {
     static CompositeFuture run(Vertx vertx, KubernetesClient client, boolean isOpenShift, ClusterOperatorConfig config) {
         printEnvInfo();
         ServiceOperator serviceOperations = new ServiceOperator(vertx, client);
-        ZookeeperSetOperator zookeeperSetOperations = new ZookeeperSetOperator(vertx, client, config.getOperationTimeoutMs());
+        PodOperator podOperations = new PodOperator(vertx, client);
+
+        ZookeeperSetOperator zookeeperSetOperations = new ZookeeperSetOperator(vertx, client, config.getOperationTimeoutMs(), podOperations);
         KafkaSetOperator kafkaSetOperations = new KafkaSetOperator(vertx, client, config.getOperationTimeoutMs());
         ConfigMapOperator configMapOperations = new ConfigMapOperator(vertx, client);
         PvcOperator pvcOperations = new PvcOperator(vertx, client);
