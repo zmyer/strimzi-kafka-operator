@@ -300,7 +300,7 @@ public class KafkaST extends AbstractST {
      * Test sending messages over plain transport, without auth
      */
     @Test
-    @JUnitGroup(name = "regression")
+    @JUnitGroup(name = "acceptance")
     public void testSendMessagesPlainAnonymous() throws InterruptedException {
         String name = "send-messages-plain-anon";
         int messagesCount = 20;
@@ -319,7 +319,7 @@ public class KafkaST extends AbstractST {
      * Test sending messages over tls transport using mutual tls auth
      */
     @Test
-    @JUnitGroup(name = "acceptance")
+    @JUnitGroup(name = "regression")
     public void testSendMessagesTlsAuthenticated() {
         String kafkaUser = "my-user";
         String name = "send-messages-tls-auth";
