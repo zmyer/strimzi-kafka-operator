@@ -118,7 +118,7 @@ In general an upgrade would introduce wire protocol changes. The CO embeds knowl
 
 ```
 class KafkaVersion {
-    private KafkaVersion(String version, String protocolVersion, String logVersion) {
+    private KafkaVersion(String version, String protocolVersion, String messageVersion) {
         // ...
     }
     private static final KafkaVersion V1_1_0 = new KafkaVersion("1.1.0", "1.1", "1.1");
@@ -139,12 +139,12 @@ class Upgrade {
 	// ...
     }
 
-    boolean protocolUpgrade() {
+    boolean requiresProtocolUpgrade() {
         return !from.protocolVersion.equals(to.protocolVersion);
     }
 
-    boolean logUpgrade() {
-        return !from.logVersion.equals(to.logVersion);
+    boolean requiresMessageUpgrade() {
+        return !from.messageVersion.equals(to.messageVersion);
     }
 }
 ```
@@ -154,13 +154,22 @@ in the CR and what to do when it changes.
 
 1. Convert `version` → image name
 2. Compare that image name with the images name of the SS (or each pod?)
+3. Id different compute `upgrade`.
 3. If different, determine whether it's an upgrade or downgrade and whether the protocol or message format has changed between versions.
-
-    Upgrade:
-       Set proto version and log version in applied Kafka config (if not already set explicitly)
-       Update image in SS
-       Rolling update
-       Update proto version in applied Kafka config
-       Rolling update
+    1. If `from.messageVersion() != kafka.spec.kafka.config."log.message.format.version"` then abort with an error
+    2. If Upgrade:
+        1. Set proto version and log version in applied Kafka config (if not already set explicitly)
+        2. Update image in SS
+        3. Rolling update
+        4. If `upgrade.requiresProtocolUpgrade()`:
+            1. Update proto version in applied Kafka config
+            2. Rolling update
+    3. If Downgrade
+        1. If `upgrade.requiresProtocolUpgrade()`:
+            1. Update proto version in applied Kafka config
+            2. Rolling update
+        2. Set proto version and log version in applied Kafka config (if not already set explicitly)
+        3. Update image in SS
+        4. Rolling update
 
 The other changes the user makes in the CR as part of the upgrade process are already handled by the CO, since they're just `config` changes.
