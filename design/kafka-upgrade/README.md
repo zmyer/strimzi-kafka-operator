@@ -15,7 +15,9 @@ The expectation is that a given version of the operator will support some
 defined set of Kafka versions and the user can selector which should be 
 used for their cluster.
 When the user upgrages to a later version supported by the CO, the CO will upgrade the cluster in a zero-downtime manner.
+
 Support for downgrading to an earlier version is not a priority.
+
 Upgrading Zookeeper is out of scope. We will assume that the new version of Kafka can use the existing Zookeeper version.
 
 ## Upgrade in Kafka
@@ -114,17 +116,18 @@ or
 The CO needs to detect when the desired version differs from the current version and perform a rolling upgrade (or downgrade).
 In general an upgrade would introduce wire protocol changes. The CO embeds knowledge of which version changes do not.
 
- class KafkaVersion {
-        private KafkaVersion(String version, String protocolVersion, String logVersion) {
+```
+class KafkaVersion {
+    private KafkaVersion(String version, String protocolVersion, String logVersion) {
+        // ...
+    }
+    private static final KafkaVersion V1_1_0 = new KafkaVersion("1.1.0", "1.1", "1.1");
+    private static final KafkaVersion V2_0_0 = new KafkaVersion("2.0.0", "2.0", "2.0");
 
-        }
-        private static final KafkaVersion V1_1_0 = new KafkaVersion("1.1.0", "1.1", "1.1");
-	private static final KafkaVersion V2_0_0 = new KafkaVersion("2.0.0", "2.0", "2.0");
-
-	/** Find the version from the given version string */
-	static KafkaVersion version(String version) {
-		// ...
-	}
+    /** Find the version from the given version string */
+    static KafkaVersion version(String version) {
+        // ...
+    }
 }
 
 class Upgrade {
@@ -143,8 +146,8 @@ class Upgrade {
     boolean logUpgrade() {
         return !from.logVersion.equals(to.logVersion);
     }
-
 }
+```
 
 The changes to the reconciliation loop are limited to support for the `version` 
 in the CR and what to do when it changes.
