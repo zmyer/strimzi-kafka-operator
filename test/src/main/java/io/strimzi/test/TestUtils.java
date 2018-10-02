@@ -33,6 +33,8 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
@@ -127,16 +129,29 @@ public final class TestUtils {
         return "";
     }
 
-    public static String changeOrgAndTag(String image, String newOrg, String newTag) {
-        return image.replaceFirst("^strimzi/", newOrg + "/").replaceFirst(":[^:]+$", ":" + newTag);
+    public static String changeOrgAndTag(String image, String newOrg, String newTag, String kafkaVersion) {
+        image = image.replaceFirst("^strimzi/", newOrg + "/");
+        Pattern p = Pattern.compile(":(.*?-kafka-)([0-9.]+)$");
+        Matcher m = p.matcher(image);
+        StringBuffer sb = new StringBuffer();
+        if (m.find()) {
+            m.appendReplacement(sb, ":" + m.group(1) + kafkaVersion);
+            m.appendTail(sb);
+            image = sb.toString();
+        } else {
+            image = image.replaceFirst(":[^:]+$", ":" + newTag);
+        }
+        return image;
     }
 
     public static String changeOrgAndTag(String image) {
         String strimziOrg = "strimzi";
         String strimziTag = "latest";
+        String kafkaVersion = "2.0.0";
         String dockerOrg = System.getenv().getOrDefault("DOCKER_ORG", strimziOrg);
         String dockerTag = System.getenv().getOrDefault("DOCKER_TAG", strimziTag);
-        return changeOrgAndTag(image, dockerOrg, dockerTag);
+        kafkaVersion = System.getenv().getOrDefault("KAFKA_VERSION", kafkaVersion);
+        return changeOrgAndTag(image, dockerOrg, dockerTag, kafkaVersion);
     }
 
     /**

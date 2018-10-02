@@ -17,22 +17,22 @@ zookeeper:
   image:
     repository: strimzi
     name: zookeeper
-    tag: latest
+    tag: latest-kafka-2.0.0
 kafka:
   image:
     repository: strimzi
     name: kafka
-    tag: latest
+    tag: latest-kafka-2.0.0
 kafkaConnect:
   image:
     repository: strimzi
     name: kafka-connect
-    tag: latest
+    tag: latest-kafka-2.0.0
 kafkaConnects2i:
   image:
     repository: strimzi
     name: kafka-connect-s2i
-    tag: latest
+    tag: latest-kafka-2.0.0
 topicOperator:
   image:
     repository: strimzi
