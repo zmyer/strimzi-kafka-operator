@@ -131,11 +131,11 @@ public final class TestUtils {
 
     public static String changeOrgAndTag(String image, String newOrg, String newTag, String kafkaVersion) {
         image = image.replaceFirst("^strimzi/", newOrg + "/");
-        Pattern p = Pattern.compile(":(.*?-kafka-)([0-9.]+)$");
+        Pattern p = Pattern.compile(":([^:]*?)-kafka-([0-9.]+)$");
         Matcher m = p.matcher(image);
         StringBuffer sb = new StringBuffer();
         if (m.find()) {
-            m.appendReplacement(sb, ":" + m.group(1) + kafkaVersion);
+            m.appendReplacement(sb, ":" + newTag + "-kafka-" + kafkaVersion);
             m.appendTail(sb);
             image = sb.toString();
         } else {

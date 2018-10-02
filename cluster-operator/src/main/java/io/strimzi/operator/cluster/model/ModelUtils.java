@@ -66,9 +66,4 @@ public class ModelUtils {
             return Collections.emptyMap();
         }
     }
-
-    public static void main(String[] a) {
-        System.out.println(parseImageMap("2.0.0=strimzi/kafka:latest-kafka-2.0.0\n  " +
-                "1.0.0=strimzi/kafka:latest-kafka-1.0.0"));
-    }
 }
