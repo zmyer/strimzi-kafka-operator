@@ -2,6 +2,7 @@ SUBDIRS=java-base kafka-base zookeeper kafka kafka-connect kafka-connect/s2i \
         stunnel-base zookeeper-stunnel kafka-stunnel entity-operator-stunnel \
         test-client kafka-mirror-maker
 DOCKER_TARGETS=docker_tag docker_push
+DOCKER_TAG ?= latest
 
 all: $(SUBDIRS)
 clean: $(SUBDIRS)
@@ -31,73 +32,48 @@ docker_tag: java-base stunnel-base zookeeper-stunnel kafka-stunnel entity-operat
 java-base stunnel-base zookeeper-stunnel kafka-stunnel entity-operator-stunnel:
 	$(MAKE) -C $@ $(MAKECMDGOALS)
 
-vars:
-	$(eval sha512 = $($(@)_sha))
-	$(eval kversion = $(subst kafka_,,$(@)))
+# Build multiple versions of kafka-base and its dependencies
+$(BUILD_KAFKA_VERSIONS):
+	# build whole dependency graph, tagging with 'latest' (so the FROM lines work)
+
+	$(eval kversion = $(subst build_kafka_,,$(@)))
+	$(eval sha512 = $(kafka_$(kversion)_sha))
 	$(eval kversion = $(subst _,.,$(kversion)))
+	$(eval imagetag = latest-kafka-$(kversion))
+	# Build $(kversion) with SHA $(sha512)
+	$(eval BUILD_ENV=DOCKER_BUILD_ARGS="--build-arg KAFKA_VERSION=$(kversion) --build-arg KAFKA_SHA512=$(sha512) $(DOCKER_BUILD_ARGS)")
+	$(BUILD_ENV) $(MAKE) -C kafka-base docker_build
+	$(BUILD_ENV) $(MAKE) -C kafka docker_build
+	$(BUILD_ENV) $(MAKE) -C zookeeper docker_build
+	$(BUILD_ENV) $(MAKE) -C kafka-connect docker_build
+	$(BUILD_ENV) $(MAKE) -C kafka-connect/s2i docker_build
+	$(BUILD_ENV) $(MAKE) -C kafka-mirror-maker docker_build
+	$(BUILD_ENV) $(MAKE) -C test-client docker_build
+
+	# Tag with versioned tag $(imagetag)
+	$(eval TAG_ENV=DOCKER_TAG="$(imagetag)")
+	$(TAG_ENV) $(MAKE) -C kafka-base docker_tag
+	$(TAG_ENV) $(MAKE) -C kafka docker_tag
+	$(TAG_ENV) $(MAKE) -C zookeeper docker_tag
+	$(TAG_ENV) $(MAKE) -C kafka-connect docker_tag
+	$(TAG_ENV) $(MAKE) -C kafka-connect/s2i docker_tag
+	$(TAG_ENV) $(MAKE) -C kafka-mirror-maker docker_tag
+	$(TAG_ENV) $(MAKE) -C test-client docker_tag
+
+
+# Tag multiple versions of kafka-base and its dependencies
+$(TAG_KAFKA_VERSIONS):
+	$(eval sha512 = $(tag_$(@)_sha))
+	$(eval kversion = $(subst tag_kafka_,,$(@)))
+	$(eval kversion = $(subst _,.,$(kversion)))
+	$(eval buildtag = latest-kafka-$(kversion))
 	$(eval imagetag = $(DOCKER_TAG)-kafka-$(kversion))
-
-# Build multiple versions of kafka-base and its dependencies
-$(BUILD_KAFKA_VERSIONS): vars
 	# Build $(kversion) with SHA $(sha512)
-
-	# Build kafka-base, tagging with $(imagetag)
-	DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg KAFKA_VERSION=$(kversion) --build-arg KAFKA_SHA512=$(sha512)" \
-        $(MAKE) -C kafka-base docker_build
-
-	# Build kafka, tagging with $(kversion)
-	DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg KAFKA_VERSION=$(kversion) --build-arg KAFKA_SHA512=$(sha512)" \
-        $(MAKE) -C kafka docker_build
-
-	# Build zookeeper, tagging with $(kversion)
-	DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg KAFKA_VERSION=$(kversion) --build-arg KAFKA_SHA512=$(sha512)" \
-        $(MAKE) -C zookeeper docker_build
-
-	# Build kafka-connect, tagging with $(kversion)
-	DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg KAFKA_VERSION=$(kversion) --build-arg KAFKA_SHA512=$(sha512)" \
-        $(MAKE) -C kafka-connect docker_build
-
-	# Build kafka-connect/s2i, tagging with $(kversion)
-	DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg KAFKA_VERSION=$(kversion) --build-arg KAFKA_SHA512=$(sha512)" \
-        $(MAKE) -C kafka-connect/s2i docker_build
-
-	# Build kafka-mirror-maker, tagging with $(kversion)
-	DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg KAFKA_VERSION=$(kversion) --build-arg KAFKA_SHA512=$(sha512)" \
-        $(MAKE) -C kafka-mirror-maker docker_build
-
-	# Build test-client, tagging with $(kversion)
-	DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg KAFKA_VERSION=$(kversion) --build-arg KAFKA_SHA512=$(sha512)" \
-        $(MAKE) -C test-client docker_build
-
-
-# Build multiple versions of kafka-base and its dependencies
-$(TAG_KAFKA_VERSIONS): vars
-	# Build $(kversion) with SHA $(sha512)
-
-	# Tagging kafka-base with $(imagetag)
-	DOCKER_TAG=$(imagetag) \
-        $(MAKE) -C kafka-base docker_tag
-
-	# Tagging kafka with $(imagetag)
-	DOCKER_TAG=$(imagetag) \
-        $(MAKE) -C kafka docker_tag
-
-	# Tagging zookeeper with $(kversion)
-	DOCKER_TAG=$(imagetag) \
-        $(MAKE) -C zookeeper docker_tag
-
-	# Tagging kafka-connect with $(kversion)
-	DOCKER_TAG=$(imagetag) \
-        $(MAKE) -C kafka-connect docker_tag
-
-	# Tagging kafka-connect/s2i with $(kversion)
-	DOCKER_TAG=$(imagetag) \
-        $(MAKE) -C kafka-connect/s2i docker_tag
-
-	# Tagging kafka-mirror-maker with $(kversion)
-	DOCKER_TAG=$(imagetag) \
-        $(MAKE) -C kafka-mirror-maker docker_tag
-
-	# Tagging test-client with $(kversion)
-	DOCKER_TAG=$(imagetag) \
-        $(MAKE) -C test-client docker_tag
+	$(eval TAG_ENV=BUILD_TAG="$(buildtag)" DOCKER_TAG="$(imagetag)")
+	$(TAG_ENV) $(MAKE) -C kafka-base docker_tag
+	$(TAG_ENV) $(MAKE) -C kafka docker_tag
+	$(TAG_ENV) $(MAKE) -C zookeeper docker_tag
+	$(TAG_ENV) $(MAKE) -C kafka-connect docker_tag
+	$(TAG_ENV) $(MAKE) -C kafka-connect/s2i docker_tag
+	$(TAG_ENV) $(MAKE) -C kafka-mirror-maker docker_tag
+	$(TAG_ENV) $(MAKE) -C test-client docker_tag
