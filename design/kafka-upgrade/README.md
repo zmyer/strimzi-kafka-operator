@@ -1,7 +1,7 @@
 # Supporting Kafka upgrades
 
 * Status: **Under discussion**
-* Discussion: [GitHub PR](https://github.com/strimzi/strimzi-kafka-operator/pull/623)
+* Discussion: [GitHub PR](https://github.com/strimzi/strimzi-kafka-operator/pull/918)
 
 ## Motivation
 
