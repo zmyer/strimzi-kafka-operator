@@ -18,8 +18,8 @@ kafka_2_0_0_sha=b28e81705e30528f1abb6766e22dfe9dae50b1e1e93330c880928ff7a08e6b38
 
 KAFKA_VERSIONS = kafka_1_0_2 kafka_1_1_1 kafka_2_0_0
 
-BUILD_KAFKA_VERSIONS = $(subst build_kafka_,kafka_,$(KAFKA_VERSIONS))
-TAG_KAFKA_VERSIONS = $(subst tag_kafka_,kafka_,$(KAFKA_VERSIONS))
+BUILD_KAFKA_VERSIONS = $(subst kafka_,build_kafka_,$(KAFKA_VERSIONS))
+TAG_KAFKA_VERSIONS = $(subst kafka_,tag_kafka_,$(KAFKA_VERSIONS))
 
 docker_build: java-base stunnel-base zookeeper-stunnel kafka-stunnel entity-operator-stunnel \
     $(BUILD_KAFKA_VERSIONS)
