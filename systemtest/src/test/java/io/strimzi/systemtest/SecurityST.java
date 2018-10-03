@@ -16,8 +16,6 @@ import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import java.util.stream.IntStream;
-
 import static org.hamcrest.Matchers.containsString;
 
 @RunWith(StrimziRunner.class)
@@ -38,7 +36,7 @@ public class SecurityST extends AbstractST {
         LOGGER.info("Running testCertificates {}", CLUSTER_NAME);
 
         String commandForKafkaBootstrap = "openssl s_client -connect my-cluster-kafka-bootstrap:9093 -showcerts " +
-                        "-CAfile /opt/kafka/broker-certs/cluster-ca.crt " +
+                        "-CAfile /opt/kafka/cluster-ca-certs/ca.crt " +
                         "-verify_hostname my-cluster-kafka-bootstrap";
         String outputForKafkaBootstrap =
                 kubeClient.execInPodContainer(kafkaPodName(CLUSTER_NAME, 0), "kafka", "/bin/bash", "-c", commandForKafkaBootstrap).out();
@@ -46,13 +44,13 @@ public class SecurityST extends AbstractST {
 
 
         String commandForZookeeperClient = "openssl s_client -connect my-cluster-zookeeper-client:2181 -showcerts " +
-                "-CAfile /opt/kafka/broker-certs/cluster-ca.crt " +
+                "-CAfile /opt/kafka/cluster-ca-certs/ca.crt " +
                 "-verify_hostname my-cluster-zookeeper-client";
         String outputForZookeeperClient =
                 kubeClient.execInPodContainer(kafkaPodName(CLUSTER_NAME, 0), "kafka", "/bin/bash", "-c", commandForZookeeperClient).out();
         checkZookeeperCertificates(outputForZookeeperClient);
 
-        IntStream.rangeClosed(0, 1).forEach(podId -> {
+        for (int podId = 0; podId <=1; podId++) {
             String commandForKafkaPort9091 = generateOpenSSLCommandWithCerts(kafkaPodName(CLUSTER_NAME, podId), "my-cluster-kafka-brokers", "9091");
             String commandForKafkaPort9093 = generateOpenSSLCommandWithCAfile(kafkaPodName(CLUSTER_NAME, podId), "my-cluster-kafka-brokers", "9093");
 
@@ -84,17 +82,17 @@ public class SecurityST extends AbstractST {
                     throw new RuntimeException(e);
                 }
             }
-        });
+        }
     }
 
     private String generateOpenSSLCommandWithCAfile(String podName, String hostname, String port) {
         return "openssl s_client -connect " + podName + "." + hostname + ":" + port +
-                " -showcerts -CAfile /opt/kafka/broker-certs/cluster-ca.crt " +
+                " -showcerts -CAfile /opt/kafka/cluster-ca-certs/ca.crt " +
                 "-verify_hostname " + podName + "." + hostname + "." + NAMESPACE + ".svc.cluster.local";
     }
 
     private String generateOpenSSLCommandWithCerts(String podName, String hostname, String port) {
-        return "openssl s_client -connect " + podName + "." + hostname + ":" + port + " -showcerts -CAfile /opt/kafka/broker-certs/cluster-ca.crt " +
+        return "openssl s_client -connect " + podName + "." + hostname + ":" + port + " -showcerts -CAfile /opt/kafka/cluster-ca-certs/ca.crt " +
                 "-cert /opt/kafka/broker-certs/my-cluster-kafka-0.crt " +
                 "-key /opt/kafka/broker-certs/my-cluster-kafka-0.key " +
                 "-verify_hostname " + podName + "." + hostname + "." + NAMESPACE + ".svc.cluster.local";
