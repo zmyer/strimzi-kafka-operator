@@ -144,6 +144,10 @@ public final class TestUtils {
         return image;
     }
 
+    public static void main(String[] a) {
+        System.out.println(changeOrgAndTag("strimzi/kafka:latest-kafka-2.0.0", "localhost:5000/strimzici", "3a22f34", "1.1.1"));
+    }
+
     public static String changeOrgAndTag(String image) {
         String strimziOrg = "strimzi";
         String strimziTag = "latest";

@@ -44,6 +44,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static io.strimzi.operator.cluster.model.ModelUtils.DEFAULT_KAFKA_VERSION;
+import static io.strimzi.operator.cluster.model.ModelUtils.parseImageMap;
 import static java.util.Arrays.asList;
 
 public class ZookeeperCluster extends AbstractModel {
@@ -82,6 +84,8 @@ public class ZookeeperCluster extends AbstractModel {
     public static final String ENV_VAR_ZOOKEEPER_CONFIGURATION = "ZOOKEEPER_CONFIGURATION";
     public static final String ENV_VAR_ZOOKEEPER_LOG_CONFIGURATION = "ZOOKEEPER_LOG_CONFIGURATION";
     public static final String ENV_VAR_TLS_SIDECAR_LOG_LEVEL = "TLS_SIDECAR_LOG_LEVEL";
+
+    public static final Map<String, String> IMAGE_MAP = parseImageMap(System.getenv().get("STRIMZI_ZOOKEEPER_IMAGE_MAP"));
 
     public static String zookeeperClusterName(String cluster) {
         return KafkaResources.zookeeperStatefulSetName(cluster);
@@ -156,7 +160,11 @@ public class ZookeeperCluster extends AbstractModel {
             replicas = ZookeeperClusterSpec.DEFAULT_REPLICAS;
         }
         zk.setReplicas(replicas);
+        String version = DEFAULT_KAFKA_VERSION;
         String image = zookeeperClusterSpec.getImage();
+        if (image == null) {
+            image = IMAGE_MAP.get(version);
+        }
         if (image == null) {
             image = ZookeeperClusterSpec.DEFAULT_IMAGE;
         }

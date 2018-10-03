@@ -17,7 +17,8 @@ import static java.util.Arrays.asList;
  */
 public class KafkaConfiguration extends AbstractConfiguration {
 
-
+    public static final String INTERBROKER_PROTOCOL_VERSION = "inter.broker.protocol.version";
+    public static final String LOG_MESSAGE_FORMAT_VERSION = "log.message.format.version";
 
     private static final List<String> FORBIDDEN_OPTIONS;
 

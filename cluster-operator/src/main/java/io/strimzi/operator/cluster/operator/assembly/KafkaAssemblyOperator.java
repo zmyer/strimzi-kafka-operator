@@ -8,6 +8,7 @@ import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
+import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.extensions.Deployment;
@@ -16,11 +17,12 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.dsl.Resource;
 import io.fabric8.openshift.api.model.Route;
 import io.strimzi.api.kafka.KafkaAssemblyList;
+import io.strimzi.api.kafka.model.CertificateAuthority;
 import io.strimzi.api.kafka.model.DoneableKafka;
 import io.strimzi.api.kafka.model.ExternalLogging;
 import io.strimzi.api.kafka.model.Kafka;
-import io.strimzi.api.kafka.model.CertificateAuthority;
 import io.strimzi.certs.CertManager;
+import io.strimzi.operator.cluster.KafkaUpgradeException;
 import io.strimzi.operator.cluster.model.AbstractModel;
 import io.strimzi.operator.cluster.model.ClientsCa;
 import io.strimzi.operator.cluster.model.ClusterCa;
@@ -28,6 +30,9 @@ import io.strimzi.operator.cluster.model.EntityOperator;
 import io.strimzi.operator.cluster.model.EntityTopicOperator;
 import io.strimzi.operator.cluster.model.EntityUserOperator;
 import io.strimzi.operator.cluster.model.KafkaCluster;
+import io.strimzi.operator.cluster.model.KafkaConfiguration;
+import io.strimzi.operator.cluster.model.KafkaUpgrade;
+import io.strimzi.operator.cluster.model.KafkaVersion;
 import io.strimzi.operator.cluster.model.ModelUtils;
 import io.strimzi.operator.cluster.model.TopicOperator;
 import io.strimzi.operator.cluster.model.ZookeeperCluster;
@@ -342,6 +347,69 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator<KubernetesCl
             }
             return Future.succeededFuture(this);
         }
+
+        Future<ReconciliationState> kafkaUpgrade(Pod pod) {
+            KafkaVersion desiredVersion = KafkaVersion.version(kafkaAssembly.getSpec().getKafka().getVersion());
+            String versionAnno = pod.getMetadata().getAnnotations().get("strimzi.io/kafka-version");
+            KafkaVersion currentVersion = KafkaVersion.version(versionAnno);
+            String phaseAnno = pod.getMetadata().getAnnotations().get("strimzi.io/upgrade-phase");
+            int phase = phaseAnno == null ? 0 : Integer.parseInt(phaseAnno);
+            int cmp = currentVersion.compareTo(desiredVersion);
+            if (cmp != 0) {
+                KafkaUpgrade upgrade = new KafkaUpgrade(currentVersion, desiredVersion);
+                if (cmp < 0) {
+                    // An upgrade
+                    switch (phase) {
+                        case 0:
+                            // Initial phase: Ensure configs set, replace image, rolling upgrade
+                            String oldMessageFormat = kafkaCluster.getConfiguration().getConfigOption(KafkaConfiguration.LOG_MESSAGE_FORMAT_VERSION, currentVersion.messageVersion());
+                            if (!oldMessageFormat.equals(currentVersion.messageVersion())) {
+                                throw new KafkaUpgradeException(
+                                        String.format("Cannot upgrade Kafka cluster %s in namespace %s to version %s " +
+                                                        "because the current cluster is configured with %s=%s, which is not " +
+                                                        "the message format version of the current version of that cluster %s. " +
+                                                        "Revert the version to %s, ensure all clients as compatible with " +
+                                                        "message format version %s, update %s to %s, restart all the clients and " +
+                                                        "then start the upgrade the Kafka cluster version.",
+                                                name, namespace, desiredVersion,
+                                                KafkaConfiguration.LOG_MESSAGE_FORMAT_VERSION, oldMessageFormat,
+                                                currentVersion,
+                                                currentVersion,
+                                                oldMessageFormat, KafkaConfiguration.LOG_MESSAGE_FORMAT_VERSION, oldMessageFormat));
+                            } else {
+                                kafkaCluster.getConfiguration().setConfigOption(KafkaConfiguration.LOG_MESSAGE_FORMAT_VERSION, oldMessageFormat);
+                            }
+                            if (upgrade.requiresProtocolUpgrade()) {
+                                // Set proto version and message version in Kafka config, if they're not already set
+                                String oldProtocolVersion = kafkaCluster.getConfiguration().getConfigOption(KafkaConfiguration.INTERBROKER_PROTOCOL_VERSION, currentVersion.protocolVersion());
+                                kafkaCluster.getConfiguration().setConfigOption(KafkaConfiguration.INTERBROKER_PROTOCOL_VERSION, oldProtocolVersion);
+                                // TODO Patch SS to update annotation strimzi.io/upgrade-phase=1
+                            } else {
+                                // TODO Patch SS to update annotation strimzi.io/upgrade-phase=2
+                            }
+                            // TODO And proceed with patch and rolling upgrade here
+
+                            break;
+                        case 1:
+                            // Cluster is now using new binaries, but old proto version
+                            if (upgrade.requiresProtocolUpgrade()) {
+                                // Update to new proto version and rolling upgrade
+                                kafkaCluster.getConfiguration().removeConfigOption(KafkaConfiguration.INTERBROKER_PROTOCOL_VERSION);
+                            }
+                            // TODO Patch SS to update annotation strimzi.io/upgrade-phase=2
+                            break;
+                        case 2:
+                            // TODO There is no phase 2
+                    }
+                } else {
+                    // downgrade
+                }
+                return Future.succeededFuture();
+            } else {
+                return Future.succeededFuture();
+            }
+        }
+
 
         Future<ReconciliationState> getZookeeperState() {
             Future<ReconciliationState> fut = Future.future();

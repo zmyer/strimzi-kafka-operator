@@ -167,6 +167,22 @@ public abstract class AbstractConfiguration {
         return configuration;
     }
 
+    public String getConfigOption(String configOption) {
+        return getConfigOption(configOption, null);
+    }
+
+    public String getConfigOption(String configOption, String defaultValue) {
+        return options.getProperty(configOption, defaultValue);
+    }
+
+    public String setConfigOption(String configOption, String value) {
+        options.setProperty(configOption, value);
+    }
+
+    public String removeConfigOption(String configOption) {
+        options.remove(configOption);
+    }
+
     /**
      * Strip comments from configuration string. Comments are lines starting with #. The default comment with timestamp
      * which is always added by Proeprties class is otherwise triggering rolling update when used in EnvVar.

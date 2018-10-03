@@ -1049,16 +1049,21 @@ public class KafkaCluster extends AbstractModel {
      * @return
      */
     public boolean isExposedWithTls() {
-        if (isExposed() && listeners.getExternal() instanceof KafkaListenerExternalRoute)   {
+        if (isExposed() && listeners.getExternal() instanceof KafkaListenerExternalRoute) {
             return true;
-        } else if (isExposed())   {
+        } else if (isExposed()) {
             if (listeners.getExternal() instanceof KafkaListenerExternalLoadBalancer) {
                 return ((KafkaListenerExternalLoadBalancer) listeners.getExternal()).isTls();
-            } else if (listeners.getExternal() instanceof KafkaListenerExternalNodePort)    {
+            } else if (listeners.getExternal() instanceof KafkaListenerExternalNodePort) {
                 return ((KafkaListenerExternalNodePort) listeners.getExternal()).isTls();
             }
         }
 
         return false;
+    }
+
+    @Override
+    public KafkaConfiguration getConfiguration() {
+        return (KafkaConfiguration) configuration;
     }
 }
