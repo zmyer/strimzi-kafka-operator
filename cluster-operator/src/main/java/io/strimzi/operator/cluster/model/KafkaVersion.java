@@ -85,15 +85,22 @@ public class KafkaVersion implements Comparable<KafkaVersion> {
 
     }
 
-    public String imageName(String templateImageName) {
-        // TODO I guess the ENV VARs in the CO are now templates, and this expands the template into a full image name
-        return null;
-    }
-
     @Override
     public int compareTo(KafkaVersion o) {
-        String[] components = version.split("\\.");
-        String[] otherComponents = o.version.split("\\.");
+        return compareDottedVersions(this.version, o.version);
+    }
+
+    /**
+     * Compare two decimal version strings, e.g. 1.10.1 &gt; 1.9.2
+     * @param version1
+     * @param version2
+     * @return Zero if version1 == version2;
+     * less than 1 if version1 &gt; version2;
+     * greater than 1 if version1 &gt; version2.
+     */
+    public static int compareDottedVersions(String version1, String version2) {
+        String[] components = version1.split("\\.");
+        String[] otherComponents = version2.split("\\.");
         for (int i = 0; i < Math.min(components.length, otherComponents.length); i++) {
             int x = Integer.parseInt(components[i]);
             int y = Integer.parseInt(otherComponents[i]);

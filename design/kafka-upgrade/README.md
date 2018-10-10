@@ -113,8 +113,19 @@ or
 
 ## Changes to the CO
 
+### Default images for each version
+
+The CO will query a new environment variable, `STRIMZI_IMAGE_MAP` to discover a mapping of Kafka version to default image. For example:
+
+    STRIMZI_IMAGE_MAP=2.0.0=strimzi/kafka:0.9.0-kafka-2.0.0,\
+                      2.1.0=strimzi/kafka:0.9.0-kafka-2.1.0
+
+### Metadata about protocol and message versions
+
 The CO needs to detect when the desired version differs from the current version and perform a rolling upgrade (or downgrade).
-In general an upgrade would introduce wire protocol changes. The CO embeds knowledge of which version changes do not.
+In general, an upgrade could introduce both wire protocol changes and message format changes.
+The CO embeds knowledge of the native wire protocol and message format verions 
+corresponding to the supported Kafka versions.
 
 ```
 class KafkaVersion {
@@ -149,16 +160,19 @@ class Upgrade {
 }
 ```
 
-The changes to the reconciliation loop are limited to support for the `version` 
-in the CR and what to do when it changes.
+### Reconciliation loop
 
-1. Convert `version` → image name
-2. Compare that image name with the images name of the SS (or each pod?)
-3. Id different compute `upgrade`.
-3. If different, determine whether it's an upgrade or downgrade and whether the protocol or message format has changed between versions.
-    1. If `from.messageVersion() != kafka.spec.kafka.config."log.message.format.version"` then abort with an error
-    2. If Upgrade:
-        1. Set proto version and log version in applied Kafka config (if not already set explicitly)
+The changes to the reconciliation loop are limited to support for the `version` 
+in the CR and what to do when it is observed to change.
+The other changes the user makes in the CR as part of the upgrade process are already handled by the CO, since they're just `config` changes.
+
+Detecting a changed version will be done using an annotation on the Kafka `StatefulSet`. Comparing the existing SS's `strimzi.io/kafka-version` annotation with the `Kafka.spec.kafka.version`
+
+1. If `oldVersion == newVersion` then no upgrade is being performed and we are done.
+2. Otherwise, compute `upgrade = new Upgrade(oldVersion, newVersion)` and determine whether it's an upgrade or downgrade.
+    1. If Upgrade:
+        1. If `oldVersion.messageVersion() != kafka.spec.kafka.config."log.message.format.version"` then abort with an error
+        2. Set proto version and log version in applied Kafka config (if not already set explicitly)
         2. Update image in SS
         3. Rolling update
         4. If `upgrade.requiresProtocolUpgrade()`:
@@ -172,4 +186,34 @@ in the CR and what to do when it changes.
         3. Update image in SS
         4. Rolling update
 
-The other changes the user makes in the CR as part of the upgrade process are already handled by the CO, since they're just `config` changes.
+
+
+## Limitations & Consequences
+
+### Validating versions and images
+
+In the described design we don't actually know the version of Kafka present in a given image.
+Instead we are trusting the metadata provided by the user via `Kafka.spec.kafka.image` and `Kafka.spec.kafka.version`, or via the CO config which provides the mapping of Kafka versions to images.
+
+### Retrofitting versions
+
+Since the CO will embed (hardcode) information about Kafka versions it follows that a given version of the CO can only support some predefined range of Kafka versions.
+That means we can't, say, produce a new image for a new Kafka version to work with an existing version of Strimzi.
+This could be addressed in the future by having this information passed to the CO from the environment. That would then allow a new Kafka version to be retrofitted to an existing CO by:
+
+1. releasing a new image 
+2. reconfiguring the CO
+3. redeploying the CO.
+
+## Validation of `Kafka.spec.kafka.config`
+
+Since different Kafka versions support different configuration parameters, supporting multiple versions makes it harder to perform deeper validation of `Kafka.spec.kafka.config`.
+
+We could support this as extra metadata (in addition to protocol and message verion) hard coded into the CO, but that makes 'Retrofitting versions' harder.
+
+It would be better if the CO could introspect a given image to discover:
+
+1. The version of Kafka it supports
+2. The configuration parameters, and their metadata.
+
+One way to achieve this would be for images to have an alternative entry point, which instead of starting the broker

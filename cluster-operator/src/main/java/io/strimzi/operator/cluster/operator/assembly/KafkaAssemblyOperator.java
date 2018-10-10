@@ -5,14 +5,16 @@
 package io.strimzi.operator.cluster.operator.assembly;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
+import io.fabric8.kubernetes.api.model.Container;
+import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
-import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.extensions.Deployment;
 import io.fabric8.kubernetes.api.model.extensions.StatefulSet;
+import io.fabric8.kubernetes.api.model.extensions.StatefulSetBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.dsl.Resource;
 import io.fabric8.openshift.api.model.Route;
@@ -60,11 +62,19 @@ import org.apache.logging.log4j.Logger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.function.BiFunction;
 
 import static io.strimzi.operator.common.operator.resource.AbstractScalableResourceOperator.STRIMZI_OPERATOR_DOMAIN;
+import static io.strimzi.operator.cluster.model.KafkaCluster.ANNO_STRIMZI_IO_FROM_VERSION;
+import static io.strimzi.operator.cluster.model.KafkaCluster.ANNO_STRIMZI_IO_KAFKA_VERSION;
+import static io.strimzi.operator.cluster.model.KafkaCluster.ANNO_STRIMZI_IO_TO_VERSION;
+import static io.strimzi.operator.cluster.model.KafkaCluster.ENV_VAR_KAFKA_CONFIGURATION;
+import static io.strimzi.operator.cluster.model.KafkaConfiguration.INTERBROKER_PROTOCOL_VERSION;
+import static io.strimzi.operator.cluster.model.KafkaConfiguration.LOG_MESSAGE_FORMAT_VERSION;
+import static io.strimzi.operator.cluster.model.KafkaVersion.compareDottedVersions;
 
 /**
  * <p>Assembly operator for a "Kafka" assembly, which manages:</p>
@@ -89,6 +99,7 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator<KubernetesCl
     private final ServiceAccountOperator serviceAccountOperator;
     private final RoleBindingOperator roleBindingOperator;
     private final ClusterRoleBindingOperator clusterRoleBindingOperator;
+    private final Map<String, String> versionMap;
 
     public static final String ANNOTATION_MANUAL_RESTART = STRIMZI_OPERATOR_DOMAIN + "/manual-rolling-update";
 
@@ -99,7 +110,8 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator<KubernetesCl
     public KafkaAssemblyOperator(Vertx vertx, boolean isOpenShift,
                                  long operationTimeoutMs,
                                  CertManager certManager,
-                                 ResourceOperatorSupplier supplier) {
+                                 ResourceOperatorSupplier supplier,
+                                 Map<String, String> versionMap) {
         super(vertx, isOpenShift, ResourceType.KAFKA, certManager, supplier.kafkaOperator, supplier.secretOperations, supplier.networkPolicyOperator);
         this.operationTimeoutMs = operationTimeoutMs;
         this.serviceOperations = supplier.serviceOperations;
@@ -112,6 +124,7 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator<KubernetesCl
         this.serviceAccountOperator = supplier.serviceAccountOperator;
         this.roleBindingOperator = supplier.roleBindingOperator;
         this.clusterRoleBindingOperator = supplier.clusterRoleBindingOperator;
+        this.versionMap = versionMap;
     }
 
     @Override
@@ -138,7 +151,7 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator<KubernetesCl
                 .compose(state -> state.zkScaleUp())
                 .compose(state -> state.zkServiceEndpointReadiness())
                 .compose(state -> state.zkHeadlessServiceEndpointReadiness())
-
+                .compose(state -> state.kafkaUpgrade())
                 .compose(state -> state.kafkaManualPodCleaning())
                 .compose(state -> state.kafkaManualRollingUpdate())
                 .compose(state -> state.getKafkaClusterDescription())
@@ -348,68 +361,353 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator<KubernetesCl
             return Future.succeededFuture(this);
         }
 
-        Future<ReconciliationState> kafkaUpgrade(Pod pod) {
-            KafkaVersion desiredVersion = KafkaVersion.version(kafkaAssembly.getSpec().getKafka().getVersion());
-            String versionAnno = pod.getMetadata().getAnnotations().get("strimzi.io/kafka-version");
-            KafkaVersion currentVersion = KafkaVersion.version(versionAnno);
-            String phaseAnno = pod.getMetadata().getAnnotations().get("strimzi.io/upgrade-phase");
-            int phase = phaseAnno == null ? 0 : Integer.parseInt(phaseAnno);
-            int cmp = currentVersion.compareTo(desiredVersion);
-            if (cmp != 0) {
-                KafkaUpgrade upgrade = new KafkaUpgrade(currentVersion, desiredVersion);
-                if (cmp < 0) {
-                    // An upgrade
-                    switch (phase) {
-                        case 0:
-                            // Initial phase: Ensure configs set, replace image, rolling upgrade
-                            String oldMessageFormat = kafkaCluster.getConfiguration().getConfigOption(KafkaConfiguration.LOG_MESSAGE_FORMAT_VERSION, currentVersion.messageVersion());
-                            if (!oldMessageFormat.equals(currentVersion.messageVersion())) {
-                                throw new KafkaUpgradeException(
-                                        String.format("Cannot upgrade Kafka cluster %s in namespace %s to version %s " +
-                                                        "because the current cluster is configured with %s=%s, which is not " +
-                                                        "the message format version of the current version of that cluster %s. " +
-                                                        "Revert the version to %s, ensure all clients as compatible with " +
-                                                        "message format version %s, update %s to %s, restart all the clients and " +
-                                                        "then start the upgrade the Kafka cluster version.",
-                                                name, namespace, desiredVersion,
-                                                KafkaConfiguration.LOG_MESSAGE_FORMAT_VERSION, oldMessageFormat,
-                                                currentVersion,
-                                                currentVersion,
-                                                oldMessageFormat, KafkaConfiguration.LOG_MESSAGE_FORMAT_VERSION, oldMessageFormat));
-                            } else {
-                                kafkaCluster.getConfiguration().setConfigOption(KafkaConfiguration.LOG_MESSAGE_FORMAT_VERSION, oldMessageFormat);
-                            }
-                            if (upgrade.requiresProtocolUpgrade()) {
-                                // Set proto version and message version in Kafka config, if they're not already set
-                                String oldProtocolVersion = kafkaCluster.getConfiguration().getConfigOption(KafkaConfiguration.INTERBROKER_PROTOCOL_VERSION, currentVersion.protocolVersion());
-                                kafkaCluster.getConfiguration().setConfigOption(KafkaConfiguration.INTERBROKER_PROTOCOL_VERSION, oldProtocolVersion);
-                                // TODO Patch SS to update annotation strimzi.io/upgrade-phase=1
-                            } else {
-                                // TODO Patch SS to update annotation strimzi.io/upgrade-phase=2
-                            }
-                            // TODO And proceed with patch and rolling upgrade here
-
-                            break;
-                        case 1:
-                            // Cluster is now using new binaries, but old proto version
-                            if (upgrade.requiresProtocolUpgrade()) {
-                                // Update to new proto version and rolling upgrade
-                                kafkaCluster.getConfiguration().removeConfigOption(KafkaConfiguration.INTERBROKER_PROTOCOL_VERSION);
-                            }
-                            // TODO Patch SS to update annotation strimzi.io/upgrade-phase=2
-                            break;
-                        case 2:
-                            // TODO There is no phase 2
+        Future<ReconciliationState> kafkaUpgrade() {
+            // Wait until the SS is not being updated (it shouldn't be, but there's no harm in checking)
+            String kafkaSsName = KafkaCluster.kafkaClusterName(name);
+            return kafkaSetOperations.waitForQuiescence(namespace, kafkaSsName).compose(
+                ss -> {
+                    if (ss == null) {
+                        return Future.succeededFuture(this);
                     }
-                } else {
-                    // downgrade
-                }
-                return Future.succeededFuture();
-            } else {
-                return Future.succeededFuture();
-            }
+                    Future<?> result;
+                    // Get the current version of the cluster
+                    KafkaVersion currentVersion = KafkaVersion.version(ss.getMetadata().getAnnotations().get(KafkaCluster.ANNO_STRIMZI_IO_KAFKA_VERSION));
+                    String fromVersionAnno = ss.getMetadata().getAnnotations().get(ANNO_STRIMZI_IO_FROM_VERSION);
+                    KafkaVersion fromVersion;
+                    if (fromVersionAnno != null) { // We're mid-upgrade
+                        fromVersion = KafkaVersion.version(fromVersionAnno);
+                    } else {
+                        fromVersion = currentVersion;
+                    }
+                    String toVersionAnno = ss.getMetadata().getAnnotations().get(ANNO_STRIMZI_IO_TO_VERSION);
+                    KafkaVersion toVersion;
+                    if (toVersionAnno != null) { // We're mid-upgrade
+                        toVersion = KafkaVersion.version(toVersionAnno);
+                    } else {
+                        toVersion = KafkaVersion.version(kafkaAssembly.getSpec().getKafka().getVersion());
+                    }
+                    KafkaUpgrade upgrade = new KafkaUpgrade(fromVersion, toVersion);
+                    if (upgrade.isNoop()) {
+                        log.debug("Kafka.spec.kafka.version unchanged");
+                        result = Future.succeededFuture();
+                    } else {
+                        String image = imageForVersion(toVersion);
+                        Future<StatefulSet> f = Future.succeededFuture(ss);
+                        if (upgrade.isUpgrade()) {
+                            if (currentVersion.equals(fromVersion)) {
+                                f = f.compose(ignored -> kafkaUpgradePhase1(ss, upgrade, image));
+                            }
+                            result = f.compose(ss2 -> kafkaUpgradePhase2(ss2, upgrade));
+                        } else {
+                            if (currentVersion.equals(fromVersion)) {
+                                f = f.compose(ignored -> kafkaDowngradePhase1(ss, upgrade));
+                            }
+                            result = f.compose(ignored -> kafkaDowngradePhase2(ss, upgrade, image));
+                        }
+
+                    }
+                    return result.map(this);
+                });
         }
 
+        private String imageForVersion(KafkaVersion toVersion) {
+            String i = kafkaAssembly.getSpec().getKafka().getImage();
+            if (i == null) {
+                i = versionMap.get(toVersion.version());
+            }
+            return i;
+        }
+
+        private Container getKafkaContainer(StatefulSet ss) {
+            for (Container container : ss.getSpec().getTemplate().getSpec().getContainers()) {
+                if ("kafka".equals(container.getName())) {
+                    return container;
+                }
+            }
+            throw new KafkaUpgradeException("Could not find 'kafka' container in StatefulSet " + ss.getMetadata().getName());
+        }
+
+        /**
+         * <p>Initial upgrade phase.
+         */
+        private Future<StatefulSet> kafkaUpgradePhase1(StatefulSet ss, KafkaUpgrade upgrade, String upgradedImage) {
+            log.info("{}: {}, phase 1", reconciliation, upgrade);
+
+            Map<String, String> annotations = ss.getMetadata().getAnnotations();
+            List<EnvVar> env = getKafkaContainer(ss).getEnv();
+            EnvVar kafkaConfigEnvVar = ModelUtils.findEnv(env, ENV_VAR_KAFKA_CONFIGURATION);
+            KafkaConfiguration currentKafkaConfig = KafkaConfiguration.unvalidated(kafkaConfigEnvVar != null ? kafkaConfigEnvVar.getValue() : "");
+
+            String oldMessageFormat = currentKafkaConfig.getConfigOption(LOG_MESSAGE_FORMAT_VERSION);
+            if (upgrade.requiresMessageFormatChange() &&
+                    oldMessageFormat == null) {
+                // Force the user to explicitly set the log.message.format.version
+                // to match the old version
+                throw new KafkaUpgradeException(upgrade + " requires a message format change " +
+                        "from " + upgrade.from().messageVersion() + " to " + upgrade.to().messageVersion() + ". " +
+                        "You must explicitly set " +
+                        LOG_MESSAGE_FORMAT_VERSION + "=" + upgrade.from().messageVersion() +
+                        " in Kafka.spec.kafka.config to perform the upgrade. " +
+                        "Then you can upgrade client applications. " +
+                        "And finally you can remove " + LOG_MESSAGE_FORMAT_VERSION +
+                        " from Kafka.spec.kafka.config");
+            }
+            // Otherwise both versions use the same message format, so we don't care.
+
+            String lowerVersionProtocol = currentKafkaConfig.getConfigOption(INTERBROKER_PROTOCOL_VERSION);
+            boolean twoPhase;
+            if (lowerVersionProtocol == null) {
+                twoPhase = true;
+                // Set proto version and message version in Kafka config, if they're not already set
+                lowerVersionProtocol = currentKafkaConfig.getConfigOption(INTERBROKER_PROTOCOL_VERSION, upgrade.from().protocolVersion());
+                log.info("{}: Upgrade: Setting {} to {}", reconciliation, INTERBROKER_PROTOCOL_VERSION, lowerVersionProtocol);
+                currentKafkaConfig.setConfigOption(INTERBROKER_PROTOCOL_VERSION, lowerVersionProtocol);
+                env.remove(kafkaConfigEnvVar);
+                env.add(new EnvVar(ENV_VAR_KAFKA_CONFIGURATION, currentKafkaConfig.getConfiguration(), null));
+                // Store upgrade state in annotations
+                annotations.put(ANNO_STRIMZI_IO_FROM_VERSION, upgrade.from().version());
+                annotations.put(ANNO_STRIMZI_IO_TO_VERSION, upgrade.to().version());
+            } else {
+                // There's no need for the next phase of update because the user has
+                // inter.broker.protocol.version set explicitly: The CO shouldn't remove it.
+                // We're done, so remove the annotations.
+                twoPhase = false;
+                log.info("{}: Upgrade: Removing annotations {}, {}",
+                        reconciliation, ANNO_STRIMZI_IO_FROM_VERSION, ANNO_STRIMZI_IO_TO_VERSION);
+                annotations.remove(ANNO_STRIMZI_IO_FROM_VERSION);
+                annotations.remove(ANNO_STRIMZI_IO_TO_VERSION);
+            }
+            log.info("{}: Upgrade: Setting annotation {}={}",
+                    reconciliation, KafkaCluster.ANNO_STRIMZI_IO_KAFKA_VERSION, upgrade.to().version());
+            annotations.put(KafkaCluster.ANNO_STRIMZI_IO_KAFKA_VERSION, upgrade.to().version());
+            // update the annotations, image and environment
+            StatefulSet newSs = new StatefulSetBuilder(ss)
+                    .editMetadata()
+                        .withAnnotations(annotations)
+                    .endMetadata()
+                    .editSpec()
+                        .editTemplate()
+                            .editSpec()
+                                .editFirstContainer()
+                                    .withImage(upgradedImage)
+                                    .withEnv(env)
+                                .endContainer()
+                            .endSpec()
+                        .endTemplate()
+                    .endSpec()
+                .build();
+
+            // patch and rolling upgrade
+            String name = KafkaCluster.kafkaClusterName(this.name);
+            log.info("{}: Upgrade: Patch + rolling update of {}", reconciliation, name);
+            return kafkaSetOperations.reconcile(namespace, name, newSs)
+                    .compose(result -> kafkaSetOperations.maybeRollingUpdate(ss, true).map(result.resource()))
+                    .compose(ss2 -> {
+                        log.info("{}: {}, phase 1 of {} completed: {}", reconciliation, upgrade,
+                                twoPhase ? 2 : 1,
+                                twoPhase ? "change in " + INTERBROKER_PROTOCOL_VERSION + " requires 2nd phase"
+                                        : "no change to " + INTERBROKER_PROTOCOL_VERSION + " because it is explicitly configured"
+                        );
+                        return Future.succeededFuture(twoPhase ? ss2 : null);
+                    });
+        }
+
+        /**
+         * Final upgrade phase
+         * Note: The log.message.format.version is left at the old version.
+         * It is a manual action to remove that once the user has updated all their clients.
+         */
+        private Future<Void> kafkaUpgradePhase2(StatefulSet ss, KafkaUpgrade upgrade) {
+            if (ss == null) {
+                // It was a one-phase update
+                return Future.succeededFuture();
+            }
+            // Cluster is now using new binaries, but old proto version
+            log.info("{}: {}, phase 2", reconciliation, upgrade);
+            // Remove the strimzi.io/from-version and strimzi.io/to-version since this is the last phase
+            Map<String, String> annotations = ss.getMetadata().getAnnotations();
+            log.info("{}: Upgrade: Removing annotations {}, {}",
+                    reconciliation, ANNO_STRIMZI_IO_FROM_VERSION, ANNO_STRIMZI_IO_TO_VERSION);
+            annotations.remove(ANNO_STRIMZI_IO_FROM_VERSION);
+            annotations.remove(ANNO_STRIMZI_IO_TO_VERSION);
+
+            // Remove inter.broker.protocol.version (so the new version's default is used)
+            List<EnvVar> env = getKafkaContainer(ss).getEnv();
+            EnvVar kafkaConfigEnvVar = ModelUtils.findEnv(env, ENV_VAR_KAFKA_CONFIGURATION);
+            KafkaConfiguration currentKafkaConfig = KafkaConfiguration.unvalidated(kafkaConfigEnvVar.getValue());
+
+            log.info("{}: Upgrade: Removing Kafka config {}, will default to {}",
+                    reconciliation, INTERBROKER_PROTOCOL_VERSION, upgrade.to().protocolVersion());
+            currentKafkaConfig.removeConfigOption(INTERBROKER_PROTOCOL_VERSION);
+            env.remove(kafkaConfigEnvVar);
+            env.add(new EnvVar(ENV_VAR_KAFKA_CONFIGURATION, currentKafkaConfig.getConfiguration(), null));
+
+            // Update to new proto version and rolling upgrade
+            currentKafkaConfig.removeConfigOption(INTERBROKER_PROTOCOL_VERSION);
+
+            StatefulSet newSs = new StatefulSetBuilder(ss)
+                    .editMetadata()
+                        .withAnnotations(annotations)
+                    .endMetadata()
+                    .editSpec()
+                        .editTemplate()
+                            .editSpec()
+                                .editFirstContainer()
+                                    .withEnv(env)
+                                .endContainer()
+                            .endSpec()
+                        .endTemplate()
+                    .endSpec()
+                    .build();
+
+            // Reconcile the SS and perform a rolling update of the pods
+            log.info("{}: Upgrade: Patch + rolling update of {}", reconciliation, name);
+            return kafkaSetOperations.reconcile(namespace, KafkaCluster.kafkaClusterName(name), newSs)
+                    .compose(ignored -> kafkaSetOperations.maybeRollingUpdate(ss, true))
+                    .compose(ignored -> {
+                        log.info("{}: {}, phase 2 of 2 completed", reconciliation, upgrade);
+                        return Future.succeededFuture();
+                    });
+        }
+
+        /**
+         * <p>Initial downgrade phase.
+         * <ol>
+         *     <li>Set the log.message.format.version to the old version</li>
+         *     <li>Set the inter.broker.protocol.version to the old version</li>
+         *     <li>Set the strimzi.io/upgrade-phase=1 (to record progress of the upgrade in case of CO failure)</li>
+         *     <li>Reconcile the SS and perform a rolling update of the pods</li>
+         * </ol>
+         */
+        private Future<StatefulSet> kafkaDowngradePhase1(StatefulSet ss, KafkaUpgrade upgrade) {
+            log.info("{}: {}, phase 1", reconciliation, upgrade);
+
+            Map<String, String> annotations = ss.getMetadata().getAnnotations();
+            List<EnvVar> env = getKafkaContainer(ss).getEnv();
+            EnvVar kafkaConfigEnvVar = ModelUtils.findEnv(env, ENV_VAR_KAFKA_CONFIGURATION);
+            KafkaConfiguration currentKafkaConfig = KafkaConfiguration.unvalidated(kafkaConfigEnvVar != null ? kafkaConfigEnvVar.getValue() : "");
+
+            String oldMessageFormat = currentKafkaConfig.getConfigOption(LOG_MESSAGE_FORMAT_VERSION);
+            // Force the user to explicitly set log.message.format.version
+            // (Controller shouldn't break clients)
+            if (oldMessageFormat == null || !oldMessageFormat.equals(upgrade.to().messageVersion())) {
+                throw new KafkaUpgradeException(
+                        String.format("Cannot downgrade Kafka cluster %s in namespace %s to version %s " +
+                                        "because the current cluster is configured with %s=%s. " +
+                                        "Downgraded brokers would not be able to understand existing " +
+                                        "messages with the message version %s. ",
+                                name, namespace, upgrade.to(),
+                                LOG_MESSAGE_FORMAT_VERSION, oldMessageFormat,
+                                oldMessageFormat));
+            }
+
+            String lowerVersionProtocol = currentKafkaConfig.getConfigOption(INTERBROKER_PROTOCOL_VERSION);
+            String phases;
+            if (lowerVersionProtocol == null
+                    || compareDottedVersions(lowerVersionProtocol, upgrade.to().protocolVersion()) > 0) {
+                phases = "2 (change in " + INTERBROKER_PROTOCOL_VERSION + " requires 2nd phase)";
+                // Set proto version and message version in Kafka config, if they're not already set
+                lowerVersionProtocol = currentKafkaConfig.getConfigOption(INTERBROKER_PROTOCOL_VERSION, upgrade.to().protocolVersion());
+                log.info("{}: Downgrade: Setting {} to {}", reconciliation, INTERBROKER_PROTOCOL_VERSION, lowerVersionProtocol);
+                currentKafkaConfig.setConfigOption(INTERBROKER_PROTOCOL_VERSION, lowerVersionProtocol);
+                env.remove(kafkaConfigEnvVar);
+                env.add(new EnvVar(ENV_VAR_KAFKA_CONFIGURATION, currentKafkaConfig.getConfiguration(), null));
+                // Store upgrade state in annotations
+                annotations.put(ANNO_STRIMZI_IO_FROM_VERSION, upgrade.from().version());
+                annotations.put(ANNO_STRIMZI_IO_TO_VERSION, upgrade.to().version());
+            } else {
+                // In this case there's no need for this phase of update, because the both old and new
+                // brokers speaking protocol of the lower version.
+                phases = "2 (1st phase skips rolling update)";
+                log.info("{}: {}, phase 1 of {} completed", reconciliation, upgrade, phases);
+                return Future.succeededFuture(ss);
+            }
+
+            // update the annotations, image and environment
+            StatefulSet newSs = new StatefulSetBuilder(ss)
+                    .editMetadata()
+                        .withAnnotations(annotations)
+                    .endMetadata()
+                    .editSpec()
+                        .editTemplate()
+                            .editSpec()
+                                .editFirstContainer()
+                                    .withEnv(env)
+                                .endContainer()
+                            .endSpec()
+                        .endTemplate()
+                    .endSpec()
+                    .build();
+
+            // patch and rolling upgrade
+            String name = KafkaCluster.kafkaClusterName(this.name);
+            log.info("{}: Downgrade: Patch + rolling update of {}", reconciliation, name);
+            return kafkaSetOperations.reconcile(namespace, name, newSs)
+                    .compose(result -> kafkaSetOperations.maybeRollingUpdate(ss, true).map(result.resource()))
+                    .compose(ss2 -> {
+                        log.info("{}: {}, phase 1 of {} completed", reconciliation, upgrade, phases);
+                        return Future.succeededFuture(ss2);
+                    });
+        }
+
+        /**
+         * <p>Final downgrade phase
+         * <ol>
+         *     <li>Update the strimzi.io/kafka-version to the new version</li>
+         *     <li>Remove the strimzi.io/from-kafka-version since this is the last phase</li>
+         *     <li>Remove the strimzi.io/to-kafka-version since this is the last phase</li>
+         *     <li>Remove inter.broker.protocol.version (so the new version's default is used)</li>
+         *     <li>Update the image in the SS</li>
+         *     <li>Reconcile the SS and perform a rolling update of the pods</li>
+         * </ol>
+         */
+        private Future<Void> kafkaDowngradePhase2(StatefulSet ss, KafkaUpgrade downgrade, String downgradedImage) {
+            log.info("{}: {}, phase 2", reconciliation, downgrade);
+            // Remove the strimzi.io/from-version and strimzi.io/to-version since this is the last phase
+
+            Map<String, String> annotations = ss.getMetadata().getAnnotations();
+
+            log.info("{}: Upgrade: Removing annotations {}, {}",
+                    reconciliation, ANNO_STRIMZI_IO_FROM_VERSION, ANNO_STRIMZI_IO_TO_VERSION);
+            annotations.remove(ANNO_STRIMZI_IO_FROM_VERSION);
+            annotations.remove(ANNO_STRIMZI_IO_TO_VERSION);
+            annotations.put(ANNO_STRIMZI_IO_KAFKA_VERSION, downgrade.to().version());
+
+            // Remove inter.broker.protocol.version (so the new version's default is used)
+            List<EnvVar> env = getKafkaContainer(ss).getEnv();
+            EnvVar kafkaConfigEnvVar = ModelUtils.findEnv(env, ENV_VAR_KAFKA_CONFIGURATION);
+            KafkaConfiguration currentKafkaConfig = KafkaConfiguration.unvalidated(kafkaConfigEnvVar.getValue());
+            log.info("{}: Upgrade: Removing Kafka config {}, will default to {}",
+                    reconciliation, INTERBROKER_PROTOCOL_VERSION, downgrade.to().protocolVersion());
+            currentKafkaConfig.removeConfigOption(INTERBROKER_PROTOCOL_VERSION);
+            env.remove(kafkaConfigEnvVar);
+            env.add(new EnvVar(ENV_VAR_KAFKA_CONFIGURATION, currentKafkaConfig.getConfiguration(), null));
+
+            StatefulSet newSs = new StatefulSetBuilder(ss)
+                    .editMetadata()
+                        .withAnnotations(annotations)
+                    .endMetadata()
+                    .editSpec()
+                        .editTemplate()
+                            .editSpec()
+                                .editFirstContainer()
+                                    .withImage(downgradedImage)
+                                    .withEnv(env)
+                                .endContainer()
+                            .endSpec()
+                        .endTemplate()
+                    .endSpec()
+                    .build();
+
+            // Reconcile the SS and perform a rolling update of the pods
+            log.info("{}: Upgrade: Patch + rolling update of {}", reconciliation, name);
+            return kafkaSetOperations.reconcile(namespace, KafkaCluster.kafkaClusterName(name), newSs)
+                    .compose(ignored -> kafkaSetOperations.maybeRollingUpdate(ss, true))
+                    .compose(ignored -> {
+                        log.info("{}: {}, phase 2 of 2 completed", reconciliation, downgrade);
+                        return Future.succeededFuture();
+                    });
+        }
 
         Future<ReconciliationState> getZookeeperState() {
             Future<ReconciliationState> fut = Future.future();

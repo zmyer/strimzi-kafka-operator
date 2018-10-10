@@ -52,6 +52,7 @@ import io.strimzi.api.kafka.model.TlsSidecar;
 import io.strimzi.api.kafka.model.TlsSidecarLogLevel;
 import io.strimzi.api.kafka.model.template.KafkaClusterTemplate;
 import io.strimzi.certs.CertAndKey;
+import io.strimzi.operator.cluster.ClusterOperatorConfig;
 import io.strimzi.operator.common.model.Labels;
 import io.strimzi.operator.common.operator.resource.ClusterRoleBindingOperator;
 
@@ -68,6 +69,7 @@ import java.util.stream.Collectors;
 import static io.strimzi.operator.cluster.model.ModelUtils.DEFAULT_KAFKA_VERSION;
 import static io.strimzi.operator.cluster.model.ModelUtils.parseImageMap;
 import static java.util.Arrays.asList;
+import static java.util.Collections.singletonMap;
 
 public class KafkaCluster extends AbstractModel {
 
@@ -93,7 +95,7 @@ public class KafkaCluster extends AbstractModel {
     private static final String ENV_VAR_KAFKA_AUTHORIZATION_SUPER_USERS = "KAFKA_AUTHORIZATION_SUPER_USERS";
     public static final String ENV_VAR_KAFKA_ZOOKEEPER_CONNECT = "KAFKA_ZOOKEEPER_CONNECT";
     private static final String ENV_VAR_KAFKA_METRICS_ENABLED = "KAFKA_METRICS_ENABLED";
-    protected static final String ENV_VAR_KAFKA_CONFIGURATION = "KAFKA_CONFIGURATION";
+    public static final String ENV_VAR_KAFKA_CONFIGURATION = "KAFKA_CONFIGURATION";
     public static final String ENV_VAR_TLS_SIDECAR_LOG_LEVEL = "TLS_SIDECAR_LOG_LEVEL";
 
     protected static final int CLIENT_PORT = 9092;
@@ -124,7 +126,13 @@ public class KafkaCluster extends AbstractModel {
     // Suffixes for secrets with certificates
     private static final String SECRET_BROKERS_SUFFIX = NAME_SUFFIX + "-brokers";
 
-    public static final Map<String, String> IMAGE_MAP = parseImageMap(System.getenv().get("STRIMZI_KAFKA_IMAGE_MAP"));
+    public static final Map<String, String> IMAGE_MAP = parseImageMap(System.getenv().get(ClusterOperatorConfig.STRIMZI_KAFKA_IMAGE_MAP));
+    /** Records the Kafka version currently running inside Kafka StatefulSet */
+    public static final String ANNO_STRIMZI_IO_KAFKA_VERSION = "strimzi.io/kafka-version";
+    /** Records the state of the Kafka upgrade process. Unset outside of upgrades. */
+    public static final String ANNO_STRIMZI_IO_FROM_VERSION = "strimzi.io/from-version";
+    /** Records the state of the Kafka upgrade process. Unset outside of upgrades. */
+    public static final String ANNO_STRIMZI_IO_TO_VERSION = "strimzi.io/to-version";
 
     // Kafka configuration
     private String zookeeperConnect;
@@ -134,6 +142,7 @@ public class KafkaCluster extends AbstractModel {
     private KafkaListeners listeners;
     private KafkaAuthorization authorization;
     private SortedMap<Integer, String> externalAddresses = new TreeMap<>();
+    private KafkaVersion kafkaVersion;
 
     // Templates
     protected Map<String, String> templateExternalBootstrapServiceLabels;
@@ -255,10 +264,7 @@ public class KafkaCluster extends AbstractModel {
         }
         String image = kafkaClusterSpec.getImage();
         if (image == null) {
-            image = IMAGE_MAP.get(version);
-        }
-        if (image == null) {
-            image = KafkaClusterSpec.DEFAULT_IMAGE;
+            image = IMAGE_MAP.getOrDefault(version, KafkaClusterSpec.DEFAULT_IMAGE);
         }
         result.setImage(image);
         if (kafkaClusterSpec.getReadinessProbe() != null) {
@@ -352,6 +358,7 @@ public class KafkaCluster extends AbstractModel {
             }
         }
 
+        result.kafkaVersion = KafkaVersion.version(kafkaClusterSpec.getVersion());
         return result;
     }
 
@@ -569,6 +576,7 @@ public class KafkaCluster extends AbstractModel {
      */
     public StatefulSet generateStatefulSet(boolean isOpenShift) {
         return createStatefulSet(
+                singletonMap(ANNO_STRIMZI_IO_KAFKA_VERSION, kafkaVersion.version()),
                 getVolumes(isOpenShift),
                 getVolumeClaims(),
                 getVolumeMounts(),

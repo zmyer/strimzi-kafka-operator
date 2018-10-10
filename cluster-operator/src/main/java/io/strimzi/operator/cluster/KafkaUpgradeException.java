@@ -13,6 +13,7 @@ import io.strimzi.operator.cluster.model.InvalidResourceException;
 public class KafkaUpgradeException extends InvalidResourceException {
 
     public KafkaUpgradeException() {
+        super();
     }
 
     public KafkaUpgradeException(String s) {

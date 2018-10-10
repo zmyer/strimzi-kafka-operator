@@ -51,6 +51,11 @@ public abstract class AbstractConfiguration {
      * @param defaults          Properties object with default options
      */
     public AbstractConfiguration(String configuration, List<String> forbiddenOptions, Properties defaults) {
+        Properties options = parseProperties(configuration, (Map<String, String>) (Map) defaults);
+        this.options = filterForbidden(options, forbiddenOptions);
+    }
+
+    protected static Properties parseProperties(String configuration, Map<String, String> defaults) {
         Properties options = new Properties();
         options.putAll(defaults);
         try (StringReader reader = new StringReader(configuration)) {
@@ -58,8 +63,7 @@ public abstract class AbstractConfiguration {
         } catch (IOException | IllegalArgumentException e)   {
             log.error("Failed to read the configuration from String", e);
         }
-
-        this.options = filterForbidden(options, forbiddenOptions);
+        return options;
     }
 
     /**
@@ -119,6 +123,10 @@ public abstract class AbstractConfiguration {
         this.options = filterForbidden(options, forbiddenOptions);
     }
 
+    public AbstractConfiguration(Properties options) {
+        this.options = options;
+    }
+
     /**
      * Filters forbidden values from the configuration.
      *
@@ -149,6 +157,22 @@ public abstract class AbstractConfiguration {
         return filtered;
     }
 
+    public String getConfigOption(String configOption) {
+        return getConfigOption(configOption, null);
+    }
+
+    public String getConfigOption(String configOption, String defaultValue) {
+        return options.getProperty(configOption, defaultValue);
+    }
+
+    public void setConfigOption(String configOption, String value) {
+        options.setProperty(configOption, value);
+    }
+
+    public void removeConfigOption(String configOption) {
+        options.remove(configOption);
+    }
+
     /**
      * Generate configuration file in String format.
      *
@@ -165,22 +189,6 @@ public abstract class AbstractConfiguration {
         }
 
         return configuration;
-    }
-
-    public String getConfigOption(String configOption) {
-        return getConfigOption(configOption, null);
-    }
-
-    public String getConfigOption(String configOption, String defaultValue) {
-        return options.getProperty(configOption, defaultValue);
-    }
-
-    public String setConfigOption(String configOption, String value) {
-        options.setProperty(configOption, value);
-    }
-
-    public String removeConfigOption(String configOption) {
-        options.remove(configOption);
     }
 
     /**

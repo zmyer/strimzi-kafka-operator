@@ -47,6 +47,7 @@ import java.util.Map;
 import static io.strimzi.operator.cluster.model.ModelUtils.DEFAULT_KAFKA_VERSION;
 import static io.strimzi.operator.cluster.model.ModelUtils.parseImageMap;
 import static java.util.Arrays.asList;
+import static java.util.Collections.emptyMap;
 
 public class ZookeeperCluster extends AbstractModel {
 
@@ -310,6 +311,7 @@ public class ZookeeperCluster extends AbstractModel {
     public StatefulSet generateStatefulSet(boolean isOpenShift) {
 
         return createStatefulSet(
+                emptyMap(),
                 getVolumes(isOpenShift),
                 getVolumeClaims(),
                 getVolumeMounts(),

@@ -45,6 +45,7 @@ import java.util.stream.Collectors;
 import static io.strimzi.operator.cluster.model.Ca.CA_CRT;
 import static io.strimzi.operator.cluster.model.Ca.CA_KEY;
 import static io.strimzi.test.TestUtils.set;
+import static java.util.Collections.emptyMap;
 import static java.util.Collections.singleton;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
@@ -89,7 +90,8 @@ public class CertificateRenewalTest {
         KafkaAssemblyOperator op = new KafkaAssemblyOperator(vertx, false, 1L, certManager,
                 new ResourceOperatorSupplier(null, null, null,
                         null, null, secretOps, null, null,
-                        null, null, null, null, null));
+                        null, null, null, null, null),
+                emptyMap());
         Reconciliation reconciliation = new Reconciliation("test-trigger", ResourceType.KAFKA, NAMESPACE, NAME);
 
         Kafka kafka = new KafkaBuilder()

@@ -5,6 +5,7 @@
 package io.strimzi.operator.cluster.model;
 
 
+import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.strimzi.api.kafka.model.CertificateAuthority;
 
@@ -65,5 +66,15 @@ public class ModelUtils {
         } else {
             return Collections.emptyMap();
         }
+    }
+
+    public static EnvVar findEnv(List<EnvVar> env, String envVar) {
+        EnvVar value = null;
+        for (EnvVar e : env) {
+            if (envVar.equals(e.getName())) {
+                value = e;
+            }
+        }
+        return value;
     }
 }
