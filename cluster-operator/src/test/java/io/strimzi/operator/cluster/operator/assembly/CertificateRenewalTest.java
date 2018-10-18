@@ -307,7 +307,7 @@ public class CertificateRenewalTest {
         ArgumentCaptor<Secret> c = reconcileCa(context, certificateAuthority);
         assertEquals(2, c.getAllValues().size());
         Map<String, String> certData = c.getAllValues().get(0).getData();
-        assertEquals(certData.keySet().toString(), 1, certData.size());
+        assertEquals(certData.keySet().toString(), 2, certData.size());
         assertEquals(initialCert, certData.get(CA_CRT));
         Map<String, String> keyData = c.getAllValues().get(1).getData();
         assertEquals(initialKey, keyData.get(CA_KEY));

@@ -23,7 +23,6 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.time.Instant;
 import java.time.chrono.IsoChronology;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
@@ -32,12 +31,9 @@ import java.util.Base64;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static java.time.temporal.ChronoField.DAY_OF_MONTH;
@@ -103,7 +99,6 @@ public abstract class Ca {
     protected String caKeySecretName;
     private Secret caKeySecret;
     private boolean caRenewed;
-    private boolean certsRemoved;
 
     public Ca(CertManager certManager, String commonName,
               String caCertSecretName, Secret caCertSecret,
@@ -270,8 +265,8 @@ public abstract class Ca {
 
     /**
      * Replaces the CA secret if it is within the renewal period.
-     * After calling this method {@link #certRenewed()} and {@link #certsRemoved()}
-     * will return whether the certificate was renewed and whether expired secrets were removed from the Secret.
+     * After calling this method {@link #certRenewed()}
+     * will return whether the certificate was renewed.
      */
     public void createOrRenew(String namespace, String clusterName, Map<String, String> labels, OwnerReference ownerRef) {
         X509Certificate currentCert = cert(caCertSecret, CA_CRT);
@@ -281,7 +276,6 @@ public abstract class Ca {
         if (!generateCa) {
             certData = caCertSecret != null ? caCertSecret.getData() : emptyMap();
             keyData = caKeySecret != null ? singletonMap(CA_KEY, caKeySecret.getData().get(CA_KEY)) : emptyMap();
-            certsRemoved = false;
         } else {
             if (shouldCreateOrRenew) {
                 try {
@@ -296,13 +290,9 @@ public abstract class Ca {
                 certData = caCertSecret.getData();
                 keyData = caKeySecret.getData();
             }
-            this.certsRemoved = removeExpiredCerts(certData) > 0;
         }
         SecretCertProvider secretCertProvider = new SecretCertProvider();
 
-        if (certsRemoved) {
-            log.info("{}: Expired CA certificates removed", this);
-        }
         if (caRenewed) {
             log.info("{}: Certificates renewed", this);
         }
@@ -387,39 +377,10 @@ public abstract class Ca {
 
     /**
      * True if the last call to {@link #createOrRenew(String, String, Map, OwnerReference)}
-     * resulted in expired certificates being removed from the CA Secret.
-     */
-    public boolean certsRemoved() {
-        return this.certsRemoved;
-    }
-
-    /**
-     * True if the last call to {@link #createOrRenew(String, String, Map, OwnerReference)}
      * resulted in a renewed CA certificate.
      */
     public boolean certRenewed() {
         return this.caRenewed;
-    }
-
-    private int removeExpiredCerts(Map<String, String> newData) {
-        int removed = 0;
-        Iterator<String> iter = newData.keySet().iterator();
-        while (iter.hasNext()) {
-            Pattern pattern = Pattern.compile("ca-" + "([0-9T:-]{19}).(crt|key)");
-            String key = iter.next();
-            Matcher matcher = pattern.matcher(key);
-
-            if (matcher.matches()) {
-                String date = matcher.group(1) + "Z";
-                Instant parse = DATE_TIME_FORMATTER.parse(date, Instant::from);
-                if (parse.isBefore(Instant.now())) {
-                    log.debug("Removing {} from Secret because it has expired", key);
-                    iter.remove();
-                    removed++;
-                }
-            }
-        }
-        return removed;
     }
 
     private Map<String, String>[] createOrRenewCert(X509Certificate currentCert) throws IOException {
