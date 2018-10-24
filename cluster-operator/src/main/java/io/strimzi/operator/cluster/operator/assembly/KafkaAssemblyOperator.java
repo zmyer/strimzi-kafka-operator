@@ -511,18 +511,16 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator<KubernetesCl
         }
 
         Future<ReconciliationState> zkScaleUp() {
-            int currentReplicas = 0;
-            StatefulSet ss = zkSetOperations.get(namespace, ZookeeperCluster.zookeeperClusterName(name));
-            if (ss != null) {
-                currentReplicas = ss.getSpec().getReplicas();
-            }
-            Future<StatefulSet> k = zkSetOperations.getAsync(namespace, ZookeeperCluster.zookeeperClusterName(name));
-            Future<Integer> result = k != null ? k.map(ss2 -> ss2.getSpec().getReplicas()) : Future.succeededFuture(currentReplicas);
-            for (int i = currentReplicas + 1; i <= zkCluster.getReplicas(); i++) {
-                // When scaling up a Zk cluster in one step the quorum can be lost. It is better to use steps.
-                result.compose(scaleTo -> zkSetOperations.scaleUp(namespace, zkCluster.getName(), scaleTo + 1));
-            }
-            return withVoid(result);
+            return withVoid(zkSetOperations.getAsync(namespace, ZookeeperCluster.zookeeperClusterName(name))
+                    .map(ss2 -> ss2 == null ? 0 : ss2.getSpec().getReplicas())
+                    .compose(currentReplicas -> {
+                        Future<Integer> result = Future.succeededFuture(currentReplicas);
+                        for (int i = currentReplicas + 1; i <= zkCluster.getReplicas(); i++) {
+                            // When scaling up a Zk cluster in one step the quorum can be lost. It is better to use steps.
+                            result.compose(scaleTo -> zkSetOperations.scaleUp(namespace, zkCluster.getName(), scaleTo + 1));
+                        }
+                        return result;
+                    }));
         }
 
         Future<ReconciliationState> zkServiceEndpointReadiness() {
