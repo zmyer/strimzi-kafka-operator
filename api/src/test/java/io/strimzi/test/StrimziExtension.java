@@ -5,53 +5,50 @@
 package io.strimzi.test;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
-import io.strimzi.test.k8s.KubeClusterResource;
-import io.strimzi.test.k8s.KubeClient;
 import io.strimzi.test.k8s.HelmClient;
-import io.strimzi.test.k8s.OpenShift;
+import io.strimzi.test.k8s.KubeClient;
+import io.strimzi.test.k8s.KubeClusterResource;
 import io.strimzi.test.k8s.Minishift;
+import io.strimzi.test.k8s.OpenShift;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.AfterAllCallback;
-import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.AfterEachCallback;
+import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
+import org.junit.jupiter.api.extension.ConditionEvaluationResult;
 import org.junit.jupiter.api.extension.ExecutionCondition;
 import org.junit.jupiter.api.extension.ExtensionContext;
-import org.junit.jupiter.api.extension.ConditionEvaluationResult;
 
 import java.io.File;
-import java.io.IOException;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Arrays;
-import java.util.List;
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.Map;
-import java.util.Stack;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Stack;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static io.strimzi.test.TestUtils.indent;
 import static io.strimzi.test.TestUtils.entriesToMap;
 import static io.strimzi.test.TestUtils.entry;
+import static io.strimzi.test.TestUtils.indent;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
@@ -402,17 +399,6 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
         return clusterResource().helmClient();
     }
 
-    private String getContent(File file, Consumer<JsonNode> edit) {
-        YAMLMapper mapper = new YAMLMapper();
-        try {
-            JsonNode node = mapper.readTree(file);
-            edit.accept(node);
-            return mapper.writeValueAsString(node);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
     class ResourceAction<T extends ResourceAction<T>> implements Supplier<Consumer<Throwable>> {
 
         protected List<Consumer<Throwable>> list = new ArrayList<>();
@@ -608,7 +594,7 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
 
     @SuppressWarnings("unchecked")
     private Statement installOperatorFromExamples(AnnotatedElement element, Statement last, ClusterOperator cc) {
-        Map<File, String> yamls = Arrays.stream(new File(CO_INSTALL_DIR).listFiles()).sorted().collect(Collectors.toMap(file -> file, f -> getContent(f, node -> {
+        Map<File, String> yamls = Arrays.stream(new File(CO_INSTALL_DIR).listFiles()).sorted().collect(Collectors.toMap(file -> file, f -> TestUtils.getContent(f, node -> {
             // Change the docker org of the images in the 04-deployment.yaml
             if ("050-Deployment-strimzi-cluster-operator.yaml".equals(f.getName())) {
                 ObjectNode containerNode = (ObjectNode) node.get("spec").get("template").get("spec").get("containers").get(0);
@@ -648,12 +634,9 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
 
             if (f.getName().matches(".*RoleBinding.*")) {
                 String ns = annotations(element, Namespace.class).get(0).value();
-                ArrayNode subjects = (ArrayNode) node.get("subjects");
-                ObjectNode subject = (ObjectNode) subjects.get(0);
-                subject.put("kind", "ServiceAccount")
-                        .put("name", "strimzi-cluster-operator")
-                        .put("namespace", ns);
+                return TestUtils.changeRoleBindingSubject(f, ns);
             }
+            return TestUtils.toYamlString(node);
         }), (x, y) -> x, LinkedHashMap::new));
         last = new Bracket(last, new ResourceAction().getPo(CO_DEPLOYMENT_NAME + ".*")
                 .logs(CO_DEPLOYMENT_NAME + ".*", "strimzi-cluster-operator")
