@@ -197,7 +197,7 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
     }
 
     /**
-     * TODO
+     * Class for annotations routine execution
      */
     abstract class Bracket extends Statement implements Runnable {
         public final Statement statement;
@@ -593,6 +593,9 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                     LOGGER.info("Creating namespace '{}' before test per @Namespace annotation on {}", namespace.value(), name(element));
                     kubeClient().createNamespace(namespace.value());
                     previousNamespace = namespace.use() ? kubeClient().namespace(namespace.value()) : kubeClient().namespace();
+                    if (element instanceof Method) {
+                        applyMultipleNamespacesWatcher(element);
+                    }
                 }
 
                 @Override
@@ -606,13 +609,16 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
         return last;
     }
 
-    private void applyMultipleNamespacesWatcher(List<Namespace> namespaces) {
+    private void applyMultipleNamespacesWatcher(AnnotatedElement element) {
+        List<Namespace> namespaces = annotations(element, Namespace.class);
         String defaultNamespace  = namespaces.get(0).value();
         for (Namespace namespace: namespaces) {
             if (namespace.value().matches(defaultNamespace)) {
                 continue;
             }
-            Map<File, String> yamls = Arrays.stream(new File(CO_INSTALL_DIR).listFiles((file, name) -> name.matches("[0-9]*-RoleBinding.*"))).sorted().collect(Collectors.toMap(file -> file, f -> getContent(f, node -> {
+            Map<File, String> configYamlFiles = Arrays.stream(
+                    Objects.requireNonNull(new File(CO_INSTALL_DIR).listFiles((file, name) -> name.matches("[0-9]*-RoleBinding.*")))
+            ).sorted().collect(Collectors.toMap(file -> file, f -> getContent(f, node -> {
 
                 ArrayNode subjects = (ArrayNode) node.get("subjects");
                 ObjectNode subject = (ObjectNode) subjects.get(0);
@@ -622,7 +628,7 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
 
             }), (x, y) -> x, LinkedHashMap::new));
 
-            for (Map.Entry<File, String> entry : yamls.entrySet()) {
+            for (Map.Entry<File, String> entry : configYamlFiles.entrySet()) {
                 LOGGER.info("Apply {} into namespace {}", entry.getKey(), namespace.value());
                 kubeClient().namespace(namespace.value());
                 kubeClient().clientWithAdmin().applyContent(entry.getValue());
@@ -633,7 +639,9 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
 
     @SuppressWarnings("unchecked")
     private Statement installOperatorFromExamples(AnnotatedElement element, Statement last, ClusterOperator cc) {
-        Map<File, String> yamls = Arrays.stream(new File(CO_INSTALL_DIR).listFiles()).sorted().collect(Collectors.toMap(file -> file, f -> getContent(f, node -> {
+        Map<File, String> yamls = Arrays.stream(
+                Objects.requireNonNull(new File(CO_INSTALL_DIR).listFiles())
+        ).sorted().collect(Collectors.toMap(file -> file, f -> getContent(f, node -> {
             // Change the docker org of the images in the 04-deployment.yaml
             if ("050-Deployment-strimzi-cluster-operator.yaml".equals(f.getName())) {
                 ObjectNode containerNode = (ObjectNode) node.get("spec").get("template").get("spec").get("containers").get(0);
@@ -649,7 +657,7 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                 containerNode.replace("resources", resources);
                 containerNode.remove("resources");
                 JsonNode ccImageNode = containerNode.get("image");
-                ((ObjectNode) containerNode).put("image", TestUtils.changeOrgAndTag(ccImageNode.asText()));
+                containerNode.put("image", TestUtils.changeOrgAndTag(ccImageNode.asText()));
                 for (JsonNode envVar : containerNode.get("env")) {
                     String varName = envVar.get("name").textValue();
                     // Replace all the default images with ones from the $DOCKER_ORG org and with the $DOCKER_TAG tag
@@ -706,8 +714,7 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                     kubeClient().namespace(annotations(element, Namespace.class).get(0).value());
                     kubeClient().clientWithAdmin().applyContent(entry.getValue());
                 }
-                List<Namespace> namespaces = annotations(element, Namespace.class);
-                applyMultipleNamespacesWatcher(namespaces);
+                applyMultipleNamespacesWatcher(element);
                 kubeClient().waitForDeployment(CO_DEPLOYMENT_NAME, 1);
             }
 
@@ -739,7 +746,7 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                 entry("logLevel", OPERATOR_LOG_LEVEL))
                 .collect(entriesToMap()));
 
-        /** These entries aren't applied to the deployment yaml at this time */
+        /* These entries aren't applied to the deployment yaml at this time */
         Map<String, String> envVars = Collections.unmodifiableMap(Arrays.stream(cc.envVariables())
                 .map(var -> entry(String.format("env.%s", var.key()), var.value()))
                 .collect(entriesToMap()));
