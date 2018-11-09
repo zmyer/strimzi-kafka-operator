@@ -411,10 +411,6 @@ public class AbstractST {
         return TimeMeasuringSystem.startOperation(operation);
     }
 
-    // #######################
-    // Messaging part
-    // #######################
-
     /** Get the log of the pod with the given name */
     String podLog(String podName) {
         return namespacedClient().pods().withName(podName).getLog();
