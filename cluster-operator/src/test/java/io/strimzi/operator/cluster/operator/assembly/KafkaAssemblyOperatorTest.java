@@ -673,6 +673,9 @@ public class KafkaAssemblyOperatorTest {
         when(mockKsOps.get(clusterNamespace, KafkaCluster.kafkaClusterName(clusterName))).thenReturn(
                 originalKafkaCluster.generateStatefulSet(openShift)
         );
+        when(mockKsOps.waitForQuiescence(clusterNamespace, KafkaCluster.kafkaClusterName(clusterName))).thenReturn(
+                Future.succeededFuture(originalKafkaCluster.generateStatefulSet(openShift))
+        );
         when(mockZsOps.get(clusterNamespace, ZookeeperCluster.zookeeperClusterName(clusterName))).thenReturn(
                 originalZookeeperCluster.generateStatefulSet(openShift)
         );
