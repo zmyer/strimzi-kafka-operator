@@ -350,6 +350,8 @@ spec:
                     -Xmx:
                       type: string
                       pattern: '[0-9]+[mMgG]?'
+                    gcLoggingDisabled:
+                      type: boolean
                 resources:
                   type: object
                   properties:
@@ -392,6 +394,15 @@ spec:
                   properties:
                     image:
                       type: string
+                    livenessProbe:
+                      type: object
+                      properties:
+                        initialDelaySeconds:
+                          type: integer
+                          minimum: 0
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 0
                     logLevel:
                       type: string
                       enum:
@@ -403,6 +414,15 @@ spec:
                       - notice
                       - info
                       - debug
+                    readinessProbe:
+                      type: object
+                      properties:
+                        initialDelaySeconds:
+                          type: integer
+                          minimum: 0
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 0
                     resources:
                       type: object
                       properties:
@@ -451,6 +471,8 @@ spec:
                     perPodService:
                       type: object
                       properties: {}
+                version:
+                  type: string
               required:
               - replicas
               - storage
@@ -709,6 +731,8 @@ spec:
                     -Xmx:
                       type: string
                       pattern: '[0-9]+[mMgG]?'
+                    gcLoggingDisabled:
+                      type: boolean
                 resources:
                   type: object
                   properties:
@@ -751,6 +775,15 @@ spec:
                   properties:
                     image:
                       type: string
+                    livenessProbe:
+                      type: object
+                      properties:
+                        initialDelaySeconds:
+                          type: integer
+                          minimum: 0
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 0
                     logLevel:
                       type: string
                       enum:
@@ -762,6 +795,15 @@ spec:
                       - notice
                       - info
                       - debug
+                    readinessProbe:
+                      type: object
+                      properties:
+                        initialDelaySeconds:
+                          type: integer
+                          minimum: 0
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 0
                     resources:
                       type: object
                       properties:
@@ -1025,6 +1067,15 @@ spec:
                   properties:
                     image:
                       type: string
+                    livenessProbe:
+                      type: object
+                      properties:
+                        initialDelaySeconds:
+                          type: integer
+                          minimum: 0
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 0
                     logLevel:
                       type: string
                       enum:
@@ -1036,6 +1087,15 @@ spec:
                       - notice
                       - info
                       - debug
+                    readinessProbe:
+                      type: object
+                      properties:
+                        initialDelaySeconds:
+                          type: integer
+                          minimum: 0
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 0
                     resources:
                       type: object
                       properties:
@@ -1071,6 +1131,11 @@ spec:
                       - external
                   required:
                   - type
+                jvmOptions:
+                  type: object
+                  properties:
+                    gcLoggingDisabled:
+                      type: boolean
             entityOperator:
               type: object
               properties:
@@ -1125,6 +1190,11 @@ spec:
                           - external
                       required:
                       - type
+                    jvmOptions:
+                      type: object
+                      properties:
+                        gcLoggingDisabled:
+                          type: boolean
                 userOperator:
                   type: object
                   properties:
@@ -1173,6 +1243,11 @@ spec:
                           - external
                       required:
                       - type
+                    jvmOptions:
+                      type: object
+                      properties:
+                        gcLoggingDisabled:
+                          type: boolean
                 affinity:
                   type: object
                   properties:
@@ -1375,6 +1450,15 @@ spec:
                   properties:
                     image:
                       type: string
+                    livenessProbe:
+                      type: object
+                      properties:
+                        initialDelaySeconds:
+                          type: integer
+                          minimum: 0
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 0
                     logLevel:
                       type: string
                       enum:
@@ -1386,6 +1470,15 @@ spec:
                       - notice
                       - info
                       - debug
+                    readinessProbe:
+                      type: object
+                      properties:
+                        initialDelaySeconds:
+                          type: integer
+                          minimum: 0
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 0
                     resources:
                       type: object
                       properties:

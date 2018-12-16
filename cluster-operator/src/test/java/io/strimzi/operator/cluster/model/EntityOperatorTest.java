@@ -15,6 +15,9 @@ import io.strimzi.api.kafka.model.EntityUserOperatorSpec;
 import io.strimzi.api.kafka.model.EntityUserOperatorSpecBuilder;
 import io.strimzi.api.kafka.model.Kafka;
 import io.strimzi.api.kafka.model.KafkaBuilder;
+import io.strimzi.api.kafka.model.ProbeBuilder;
+import io.strimzi.api.kafka.model.TlsSidecar;
+import io.strimzi.api.kafka.model.TlsSidecarBuilder;
 import io.strimzi.api.kafka.model.TlsSidecarLogLevel;
 import io.strimzi.operator.cluster.ResourceUtils;
 import io.strimzi.test.TestUtils;
@@ -23,6 +26,7 @@ import org.junit.Rule;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -44,13 +48,20 @@ public class EntityOperatorTest {
     private final String image = "my-image:latest";
     private final int healthDelay = 120;
     private final int healthTimeout = 30;
+    private final int tlsHealthDelay = 120;
+    private final int tlsHealthTimeout = 30;
 
     private final EntityUserOperatorSpec entityUserOperatorSpec = new EntityUserOperatorSpecBuilder()
             .build();
     private final EntityTopicOperatorSpec entityTopicOperatorSpec = new EntityTopicOperatorSpecBuilder()
             .build();
+    private final TlsSidecar tlsSidecar = new TlsSidecarBuilder()
+            .withLivenessProbe(new ProbeBuilder().withInitialDelaySeconds(tlsHealthDelay).withTimeoutSeconds(tlsHealthTimeout).build())
+            .withReadinessProbe(new ProbeBuilder().withInitialDelaySeconds(tlsHealthDelay).withTimeoutSeconds(tlsHealthTimeout).build())
+            .build();
 
     private final EntityOperatorSpec entityOperatorSpec = new EntityOperatorSpecBuilder()
+            .withTlsSidecar(tlsSidecar)
             .withTopicOperator(entityTopicOperatorSpec)
             .withUserOperator(entityUserOperatorSpec)
             .build();
@@ -67,7 +78,7 @@ public class EntityOperatorTest {
     @Test
     public void testGenerateDeployment() {
 
-        Deployment dep = entityOperator.generateDeployment(true);
+        Deployment dep = entityOperator.generateDeployment(true, Collections.EMPTY_MAP);
 
         List<Container> containers = dep.getSpec().getTemplate().getSpec().getContainers();
 
@@ -85,11 +96,15 @@ public class EntityOperatorTest {
         Container tlsSidecarContainer = containers.get(2);
         assertEquals(EntityOperatorSpec.DEFAULT_TLS_SIDECAR_IMAGE, tlsSidecarContainer.getImage());
         assertEquals(EntityOperator.defaultZookeeperConnect(cluster), AbstractModel.containerEnvVars(tlsSidecarContainer).get(EntityOperator.ENV_VAR_ZOOKEEPER_CONNECT));
-        assertEquals(TlsSidecarLogLevel.NOTICE.toValue(), AbstractModel.containerEnvVars(tlsSidecarContainer).get(EntityOperator.ENV_VAR_TLS_SIDECAR_LOG_LEVEL));
+        assertEquals(TlsSidecarLogLevel.NOTICE.toValue(), AbstractModel.containerEnvVars(tlsSidecarContainer).get(ModelUtils.TLS_SIDECAR_LOG_LEVEL));
         assertEquals(map(
                 EntityOperator.TLS_SIDECAR_CA_CERTS_VOLUME_NAME, EntityOperator.TLS_SIDECAR_CA_CERTS_VOLUME_MOUNT,
                 EntityOperator.TLS_SIDECAR_EO_CERTS_VOLUME_NAME, EntityOperator.TLS_SIDECAR_EO_CERTS_VOLUME_MOUNT),
                 EntityOperatorTest.volumeMounts(tlsSidecarContainer.getVolumeMounts()));
+        assertEquals(new Integer(tlsHealthDelay), tlsSidecarContainer.getReadinessProbe().getInitialDelaySeconds());
+        assertEquals(new Integer(tlsHealthTimeout), tlsSidecarContainer.getReadinessProbe().getTimeoutSeconds());
+        assertEquals(new Integer(tlsHealthDelay), tlsSidecarContainer.getLivenessProbe().getInitialDelaySeconds());
+        assertEquals(new Integer(tlsHealthTimeout), tlsSidecarContainer.getLivenessProbe().getTimeoutSeconds());
     }
 
     @Test
@@ -119,7 +134,7 @@ public class EntityOperatorTest {
 
     @Test
     public void withAffinity() throws IOException {
-        helper.assertDesiredResource("-Deployment.yaml", zc -> zc.generateDeployment(true).getSpec().getTemplate().getSpec().getAffinity());
+        helper.assertDesiredResource("-Deployment.yaml", zc -> zc.generateDeployment(true, Collections.EMPTY_MAP).getSpec().getTemplate().getSpec().getAffinity());
     }
 
     @Test
@@ -156,7 +171,7 @@ public class EntityOperatorTest {
         EntityOperator entityOperator = EntityOperator.fromCrd(resource);
 
         // Check Deployment
-        Deployment dep = entityOperator.generateDeployment(true);
+        Deployment dep = entityOperator.generateDeployment(true, Collections.EMPTY_MAP);
         assertTrue(dep.getMetadata().getLabels().entrySet().containsAll(depLabels.entrySet()));
         assertTrue(dep.getMetadata().getAnnotations().entrySet().containsAll(depAnots.entrySet()));
 

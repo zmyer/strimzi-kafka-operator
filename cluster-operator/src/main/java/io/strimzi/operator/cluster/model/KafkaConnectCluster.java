@@ -22,6 +22,7 @@ import io.strimzi.api.kafka.model.CertSecretSource;
 import io.strimzi.api.kafka.model.KafkaConnect;
 import io.strimzi.api.kafka.model.KafkaConnectAuthenticationScramSha512;
 import io.strimzi.api.kafka.model.KafkaConnectAuthenticationTls;
+import io.strimzi.api.kafka.model.KafkaConnectS2ISpec;
 import io.strimzi.api.kafka.model.KafkaConnectSpec;
 import io.strimzi.api.kafka.model.PasswordSecretSource;
 import io.strimzi.api.kafka.model.template.KafkaConnectTemplate;
@@ -83,7 +84,6 @@ public class KafkaConnectCluster extends AbstractModel {
         this.serviceName = serviceName(cluster);
         this.validLoggerFields = getDefaultLogConfig();
         this.ancillaryConfigName = logAndMetricsConfigName(cluster);
-        this.image = KafkaConnectSpec.DEFAULT_IMAGE;
         this.replicas = DEFAULT_REPLICAS;
         this.readinessPath = "/";
         this.readinessTimeout = DEFAULT_HEALTHCHECK_TIMEOUT;
@@ -110,8 +110,8 @@ public class KafkaConnectCluster extends AbstractModel {
         return cluster + KafkaConnectCluster.METRICS_AND_LOG_CONFIG_SUFFIX;
     }
 
-    public static KafkaConnectCluster fromCrd(KafkaConnect kafkaConnect) {
-        KafkaConnectCluster cluster = fromSpec(kafkaConnect.getSpec(), new KafkaConnectCluster(kafkaConnect.getMetadata().getNamespace(),
+    public static KafkaConnectCluster fromCrd(KafkaConnect kafkaConnect, KafkaVersion.Lookup versions) {
+        KafkaConnectCluster cluster = fromSpec(kafkaConnect.getSpec(), versions, new KafkaConnectCluster(kafkaConnect.getMetadata().getNamespace(),
                 kafkaConnect.getMetadata().getName(), Labels.fromResource(kafkaConnect).withKind(kafkaConnect.getKind())));
 
         cluster.setOwnerReference(kafkaConnect);
@@ -124,16 +124,23 @@ public class KafkaConnectCluster extends AbstractModel {
      * from the instantiation of the (subclass of) KafkaConnectCluster,
      * thus permitting reuse of the setter-calling code for subclasses.
      */
-    protected static <C extends KafkaConnectCluster> C fromSpec(KafkaConnectSpec spec, C kafkaConnect) {
+    protected static <C extends KafkaConnectCluster> C fromSpec(KafkaConnectSpec spec,
+                                                                KafkaVersion.Lookup versions,
+                                                                C kafkaConnect) {
         kafkaConnect.setReplicas(spec != null && spec.getReplicas() > 0 ? spec.getReplicas() : DEFAULT_REPLICAS);
         kafkaConnect.setConfiguration(new KafkaConnectConfiguration(spec != null ? spec.getConfig().entrySet() : emptySet()));
         if (spec != null) {
-            if (spec.getImage() != null) {
-                kafkaConnect.setImage(spec.getImage());
+            String image = spec instanceof KafkaConnectS2ISpec ?
+                    versions.kafkaConnectS2iVersion(spec.getImage(), spec.getVersion())
+                    : versions.kafkaConnectVersion(spec.getImage(), spec.getVersion());
+            if (image == null) {
+                throw new InvalidResourceException("Version is not supported");
             }
+            kafkaConnect.setImage(image);
 
             kafkaConnect.setResources(spec.getResources());
             kafkaConnect.setLogging(spec.getLogging());
+            kafkaConnect.setGcLoggingDisabled(spec.getJvmOptions() == null ? false : spec.getJvmOptions().isGcLoggingDisabled());
             kafkaConnect.setJvmOptions(spec.getJvmOptions());
             if (spec.getReadinessProbe() != null) {
                 kafkaConnect.setReadinessInitialDelay(spec.getReadinessProbe().getInitialDelaySeconds());
@@ -145,7 +152,7 @@ public class KafkaConnectCluster extends AbstractModel {
             }
 
             Map<String, Object> metrics = spec.getMetrics();
-            if (metrics != null && !metrics.isEmpty()) {
+            if (metrics != null) {
                 kafkaConnect.setMetricsEnabled(true);
                 kafkaConnect.setMetricsConfig(metrics.entrySet());
             }
@@ -304,7 +311,7 @@ public class KafkaConnectCluster extends AbstractModel {
                 .withLivenessProbe(createHttpProbe(livenessPath, REST_API_PORT_NAME, livenessInitialDelay, livenessTimeout))
                 .withReadinessProbe(createHttpProbe(readinessPath, REST_API_PORT_NAME, readinessInitialDelay, readinessTimeout))
                 .withVolumeMounts(getVolumeMounts())
-                .withResources(resources(getResources()))
+                .withResources(ModelUtils.resources(getResources()))
                 .build();
 
         containers.add(container);
@@ -318,6 +325,7 @@ public class KafkaConnectCluster extends AbstractModel {
         varList.add(buildEnvVar(ENV_VAR_KAFKA_CONNECT_CONFIGURATION, configuration.getConfiguration()));
         varList.add(buildEnvVar(ENV_VAR_KAFKA_CONNECT_METRICS_ENABLED, String.valueOf(isMetricsEnabled)));
         varList.add(buildEnvVar(ENV_VAR_KAFKA_CONNECT_BOOTSTRAP_SERVERS, bootstrapServers));
+        varList.add(buildEnvVar(ENV_VAR_KAFKA_GC_LOG_OPTS, getGcLoggingOptions()));
         heapOptions(varList, 1.0, 0L);
         jvmPerformanceOptions(varList);
         if (trustedCertificates != null && trustedCertificates.size() > 0) {

@@ -48,11 +48,18 @@ public interface KubeClient<K extends KubeClient<K>> {
     /** Creates the resources in the given files. */
     K create(File... files);
 
+    /** Creates the resources in the given files. */
+    K apply(File... files);
+
     /** Deletes the resources in the given files. */
     K delete(File... files);
 
     default K create(String... files) {
         return create(asList(files).stream().map(File::new).collect(toList()).toArray(new File[0]));
+    }
+
+    default K apply(String... files) {
+        return apply(asList(files).stream().map(File::new).collect(toList()).toArray(new File[0]));
     }
 
     default K delete(String... files) {
@@ -151,6 +158,12 @@ public interface KubeClient<K extends KubeClient<K>> {
      * @return The resource YAML.
      */
     String get(String resource, String resourceName);
+
+    /**
+     * Get a list of events in a given namespace
+     * @return List of events
+     */
+    String getEvents();
 
     K waitForResourceDeletion(String resourceType, String resourceName);
 

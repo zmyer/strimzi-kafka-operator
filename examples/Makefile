@@ -1,5 +1,7 @@
 PROJECT_NAME=examples
 
+include ../Makefile.os
+
 RELEASE_VERSION ?= latest
 RELEASE_PATH ?= ../strimzi-$(RELEASE_VERSION)/$(PROJECT_NAME)
 
@@ -12,4 +14,4 @@ release:
 	$(CP) -r ./user $(RELEASE_PATH)/
 	$(CP) -r ./topic $(RELEASE_PATH)/
 
-.PHONY: all build clean docker_build docker_push docker_tag
+.PHONY: all build clean docker_build docker_push docker_tag findbugs

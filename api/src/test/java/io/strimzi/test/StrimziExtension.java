@@ -8,50 +8,57 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
-import io.strimzi.test.k8s.KubeClusterResource;
-import io.strimzi.test.k8s.KubeClient;
+import io.fabric8.kubernetes.client.DefaultKubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientException;
+import io.fabric8.kubernetes.client.NamespacedKubernetesClient;
 import io.strimzi.test.k8s.HelmClient;
-import io.strimzi.test.k8s.OpenShift;
+import io.strimzi.test.k8s.KubeClient;
+import io.strimzi.test.k8s.KubeClusterException;
+import io.strimzi.test.k8s.KubeClusterResource;
 import io.strimzi.test.k8s.Minishift;
+import io.strimzi.test.k8s.OpenShift;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.AfterAllCallback;
-import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.AfterEachCallback;
+import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
+import org.junit.jupiter.api.extension.ConditionEvaluationResult;
 import org.junit.jupiter.api.extension.ExecutionCondition;
 import org.junit.jupiter.api.extension.ExtensionContext;
-import org.junit.jupiter.api.extension.ConditionEvaluationResult;
+import org.junit.jupiter.api.extension.TestExecutionExceptionHandler;
 
 import java.io.File;
-import java.io.IOException;
 import java.io.InputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Arrays;
-import java.util.List;
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.Map;
-import java.util.Stack;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Stack;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static io.strimzi.test.TestUtils.indent;
 import static io.strimzi.test.TestUtils.entriesToMap;
 import static io.strimzi.test.TestUtils.entry;
+import static io.strimzi.test.TestUtils.indent;
+import static io.strimzi.test.TestUtils.writeFile;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
@@ -64,7 +71,7 @@ import static java.util.Collections.singletonList;
  * test classes and/or test methods.
  */
 public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, AfterEachCallback, BeforeEachCallback,
-        ExecutionCondition {
+        ExecutionCondition, TestExecutionExceptionHandler {
     private static final Logger LOGGER = LogManager.getLogger(StrimziExtension.class);
 
     /**
@@ -92,10 +99,13 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
     private static final String DEFAULT_TAG = "";
     private static final String TAG_LIST_NAME = "junitTags";
     private static final String START_TIME = "start time";
+    private static final String TEST_LOG_DIR = System.getenv().getOrDefault("TEST_LOG_DIR", "../systemtest/target/logs/");
 
     /** Tags */
     public static final String ACCEPTANCE = "acceptance";
     public static final String REGRESSION = "regression";
+
+    private static DefaultKubernetesClient client = new DefaultKubernetesClient();
 
     private KubeClusterResource clusterResource;
     private Class testClass;
@@ -174,6 +184,71 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
     }
 
     @Override
+    public void handleTestExecutionException(ExtensionContext context, Throwable throwable) throws Throwable {
+        if (throwable instanceof AssertionError || throwable instanceof TimeoutException || throwable instanceof KubeClusterException) {
+            // Get current date to create a unique folder
+            String currentDate = new SimpleDateFormat("yyyyMMdd_HHmmss").format(Calendar.getInstance().getTime());
+            String logDir = context.getTestMethod().isPresent() ?
+                    TEST_LOG_DIR + context.getTestMethod().get().getDeclaringClass().getSimpleName() + "." + context.getTestMethod().get().getName() + "_" + currentDate
+                    : TEST_LOG_DIR + currentDate;
+
+            LogCollector logCollector = new LogCollector(client.inNamespace(kubeClient().namespace()), new File(logDir));
+            logCollector.collectEvents();
+            logCollector.collectLogsForPods();
+        }
+        throw throwable;
+    }
+
+    private class LogCollector {
+        NamespacedKubernetesClient client;
+        String namespace;
+        File logDir;
+
+        private LogCollector(NamespacedKubernetesClient client, File logDir) {
+            this.client = client;
+            this.namespace = client.getNamespace();
+            this.logDir = logDir;
+            logDir.mkdirs();
+        }
+
+        private void collectLogsForPods() {
+            LOGGER.info("Collecting logs for pods in namespace {}", namespace);
+
+            client.pods().list().getItems().forEach(pod -> {
+                String podName = pod.getMetadata().getName();
+
+                client.pods().withName(podName).get().getStatus().getContainerStatuses().forEach(containerStatus -> {
+                    try {
+                        String log = client.pods().withName(podName).inContainer(containerStatus.getName()).getLog();
+                        // Print container logs to console
+                        LOGGER.info("Logs for container {} from pod {}{}{}", containerStatus.getName(), podName, System.lineSeparator(), log);
+
+                        // Write logs from containers to files
+                        writeFile(logDir + "/" + "logs-pod-" + podName + "-container-" + containerStatus.getName() + ".log", log);
+                    } catch (KubernetesClientException e) {
+                        if (e.getMessage().equals("container \"" + containerStatus.getName() + "\" in pod \"" + podName + "\" is terminated")) {
+                            LOGGER.info("Container {} in pod {} is terminated before teardown", containerStatus.getName(), podName);
+                        } else {
+                            throw e;
+                        }
+                    }
+                });
+            });
+        }
+
+        private void collectEvents() {
+            LOGGER.info("Collecting events in namespace {}", namespace);
+            String events = kubeClient().getEvents();
+
+            // Print events to console
+            LOGGER.info("Events for namespace {}{}{}", namespace, System.lineSeparator(), events);
+
+            // Write events to file
+            writeFile(logDir + "/" + "events-in-namespace" + kubeClient().namespace() + ".log", events);
+        }
+    }
+
+    @Override
     public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
         if (context.getElement().get() instanceof Class) {
             saveTestingClassInfo(context);
@@ -197,7 +272,7 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
     }
 
     /**
-     * TODO
+     * Class for annotations routine execution
      */
     abstract class Bracket extends Statement implements Runnable {
         public final Statement statement;
@@ -402,17 +477,6 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
         return clusterResource().helmClient();
     }
 
-    private String getContent(File file, Consumer<JsonNode> edit) {
-        YAMLMapper mapper = new YAMLMapper();
-        try {
-            JsonNode node = mapper.readTree(file);
-            edit.accept(node);
-            return mapper.writeValueAsString(node);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
     class ResourceAction<T extends ResourceAction<T>> implements Supplier<Consumer<Throwable>> {
 
         protected List<Consumer<Throwable>> list = new ArrayList<>();
@@ -448,11 +512,6 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
 
         public ResourceAction getSs(String pattern) {
             return getResources(new ResourceMatcher("statefulset", pattern));
-        }
-
-        public ResourceAction logs(String pattern, String container) {
-            list.add(new DumpLogsErrorAction(new ResourceMatcher("pod", pattern), container));
-            return this;
         }
 
         /**
@@ -495,26 +554,6 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                     .filter(name -> name.matches(namePattern))
                     .map(name -> new ResourceName(kind, name))
                     .collect(Collectors.toList());
-        }
-    }
-
-    class DumpLogsErrorAction implements Consumer<Throwable> {
-
-        private final Supplier<List<ResourceName>> podNameSupplier;
-        private final String container;
-
-        public DumpLogsErrorAction(Supplier<List<ResourceName>> podNameSupplier, String container) {
-            this.podNameSupplier = podNameSupplier;
-            this.container = container;
-        }
-
-        @Override
-        public void accept(Throwable t) {
-            for (ResourceName pod : podNameSupplier.get()) {
-                if (pod.kind.equals("pod") || pod.kind.equals("pods") || pod.kind.equals("po")) {
-                    LOGGER.info("Logs from pod {}:{}{}", pod.name, System.lineSeparator(), indent(kubeClient().logs(pod.name, container)));
-                }
-            }
         }
     }
 
@@ -593,6 +632,9 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                     LOGGER.info("Creating namespace '{}' before test per @Namespace annotation on {}", namespace.value(), name(element));
                     kubeClient().createNamespace(namespace.value());
                     previousNamespace = namespace.use() ? kubeClient().namespace(namespace.value()) : kubeClient().namespace();
+                    if (element instanceof Method) {
+                        applyMultipleNamespacesWatcher(element);
+                    }
                 }
 
                 @Override
@@ -606,9 +648,37 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
         return last;
     }
 
+    private void applyMultipleNamespacesWatcher(AnnotatedElement element) {
+        List<Namespace> namespaces = annotations(element, Namespace.class);
+        String defaultNamespace  = namespaces.get(0).value();
+        for (Namespace namespace: namespaces) {
+            if (namespace.value().matches(defaultNamespace)) {
+                continue;
+            }
+            Map<File, String> configYamlFiles = Arrays.stream(
+                    Objects.requireNonNull(new File(CO_INSTALL_DIR).listFiles((file, name) -> name.matches("[0-9]*-RoleBinding.*")))
+            ).sorted().collect(Collectors.toMap(file -> file, f -> TestUtils.getContent(f, node -> {
+
+                ArrayNode subjects = (ArrayNode) node.get("subjects");
+                ObjectNode subject = (ObjectNode) subjects.get(0);
+                subject.put("kind", "ServiceAccount")
+                        .put("name", "strimzi-cluster-operator")
+                        .put("namespace", defaultNamespace);
+                return TestUtils.toYamlString(node);
+            }), (x, y) -> x, LinkedHashMap::new));
+
+            for (Map.Entry<File, String> entry : configYamlFiles.entrySet()) {
+                LOGGER.info("Apply {} into namespace {}", entry.getKey(), namespace.value());
+                kubeClient().namespace(namespace.value());
+                kubeClient().clientWithAdmin().applyContent(entry.getValue());
+            }
+        }
+        kubeClient().namespace(defaultNamespace);
+    }
+
     @SuppressWarnings("unchecked")
     private Statement installOperatorFromExamples(AnnotatedElement element, Statement last, ClusterOperator cc) {
-        Map<File, String> yamls = Arrays.stream(new File(CO_INSTALL_DIR).listFiles()).sorted().collect(Collectors.toMap(file -> file, f -> getContent(f, node -> {
+        Map<File, String> yamls = Arrays.stream(new File(CO_INSTALL_DIR).listFiles()).sorted().collect(Collectors.toMap(file -> file, f -> TestUtils.getContent(f, node -> {
             // Change the docker org of the images in the 04-deployment.yaml
             if ("050-Deployment-strimzi-cluster-operator.yaml".equals(f.getName())) {
                 ObjectNode containerNode = (ObjectNode) node.get("spec").get("template").get("spec").get("containers").get(0);
@@ -624,13 +694,39 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                 containerNode.replace("resources", resources);
                 containerNode.remove("resources");
                 JsonNode ccImageNode = containerNode.get("image");
-                ((ObjectNode) containerNode).put("image", TestUtils.changeOrgAndTag(ccImageNode.asText()));
+                containerNode.put("image", TestUtils.changeOrgAndTag(ccImageNode.asText()));
                 for (JsonNode envVar : containerNode.get("env")) {
                     String varName = envVar.get("name").textValue();
                     // Replace all the default images with ones from the $DOCKER_ORG org and with the $DOCKER_TAG tag
                     if (varName.matches("STRIMZI_DEFAULT_.*_IMAGE")) {
                         String value = envVar.get("value").textValue();
-                        ((ObjectNode) envVar).put("value", TestUtils.changeOrgAndTag(value));
+                        String v = TestUtils.changeOrgAndTag(value);
+                        LOGGER.info("{}={}", varName, v);
+                        ((ObjectNode) envVar).put("value", v);
+                    }
+                    if (varName.matches("STRIMZI_KAFKA_IMAGES")) {
+                        String value = envVar.get("value").textValue();
+                        String v = TestUtils.changeOrgAndTagInImageMap(value);
+                        LOGGER.info("STRIMZI_KAFKA_IMAGES={}", v);
+                        ((ObjectNode) envVar).put("value", v);
+                    }
+                    if (varName.matches("STRIMZI_KAFKA_CONNECT_IMAGES")) {
+                        String value = envVar.get("value").textValue();
+                        String v = TestUtils.changeOrgAndTagInImageMap(value);
+                        LOGGER.info("STRIMZI_KAFKA_CONNECT_IMAGES={}", v);
+                        ((ObjectNode) envVar).put("value", v);
+                    }
+                    if (varName.matches("STRIMZI_KAFKA_CONNECT_S2I_IMAGES")) {
+                        String value = envVar.get("value").textValue();
+                        String v = TestUtils.changeOrgAndTagInImageMap(value);
+                        LOGGER.info("STRIMZI_KAFKA_CONNECT_S2I_IMAGES={}", v);
+                        ((ObjectNode) envVar).put("value", v);
+                    }
+                    if (varName.matches("STRIMZI_KAFKA_MIRROR_MAKER_IMAGES")) {
+                        String value = envVar.get("value").textValue();
+                        String v = TestUtils.changeOrgAndTagInImageMap(value);
+                        LOGGER.info("STRIMZI_KAFKA_MIRROR_MAKER_IMAGES={}", v);
+                        ((ObjectNode) envVar).put("value", v);
                     }
                     // Set log level
                     if (varName.equals("STRIMZI_LOG_LEVEL")) {
@@ -643,20 +739,26 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                             ((ObjectNode) envVar).put("value", envVariable.value());
                         }
                     }
+
+                    if (varName.matches("STRIMZI_NAMESPACE")) {
+                        List<Namespace> namespaces = annotations(element, Namespace.class);
+                        List<String> test = new ArrayList<>();
+                        ((ObjectNode) envVar).remove("valueFrom");
+                        for (Namespace namespace : namespaces) {
+                            test.add(namespace.value());
+                        }
+                        ((ObjectNode) envVar).put("value", String.join(",", test));
+                    }
                 }
             }
 
             if (f.getName().matches(".*RoleBinding.*")) {
                 String ns = annotations(element, Namespace.class).get(0).value();
-                ArrayNode subjects = (ArrayNode) node.get("subjects");
-                ObjectNode subject = (ObjectNode) subjects.get(0);
-                subject.put("kind", "ServiceAccount")
-                        .put("name", "strimzi-cluster-operator")
-                        .put("namespace", ns);
+                return TestUtils.changeRoleBindingSubject(f, ns);
             }
+            return TestUtils.toYamlString(node);
         }), (x, y) -> x, LinkedHashMap::new));
         last = new Bracket(last, new ResourceAction().getPo(CO_DEPLOYMENT_NAME + ".*")
-                .logs(CO_DEPLOYMENT_NAME + ".*", "strimzi-cluster-operator")
                 .getDep(CO_DEPLOYMENT_NAME)) {
             Stack<String> deletable = new Stack<>();
 
@@ -667,9 +769,11 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                 for (Map.Entry<File, String> entry : yamls.entrySet()) {
                     LOGGER.info("creating possibly modified version of {}", entry.getKey());
                     deletable.push(entry.getValue());
+
                     kubeClient().namespace(annotations(element, Namespace.class).get(0).value());
                     kubeClient().clientWithAdmin().applyContent(entry.getValue());
                 }
+                applyMultipleNamespacesWatcher(element);
                 kubeClient().waitForDeployment(CO_DEPLOYMENT_NAME, 1);
             }
 
@@ -701,7 +805,7 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                 entry("logLevel", OPERATOR_LOG_LEVEL))
                 .collect(entriesToMap()));
 
-        /** These entries aren't applied to the deployment yaml at this time */
+        /* These entries aren't applied to the deployment yaml at this time */
         Map<String, String> envVars = Collections.unmodifiableMap(Arrays.stream(cc.envVariables())
                 .map(var -> entry(String.format("env.%s", var.key()), var.value()))
                 .collect(entriesToMap()));
@@ -710,7 +814,6 @@ public class StrimziExtension implements AfterAllCallback, BeforeAllCallback, Af
                 .collect(entriesToMap());
 
         last = new Bracket(last, new ResourceAction().getPo(CO_DEPLOYMENT_NAME + ".*")
-                .logs(CO_DEPLOYMENT_NAME + ".*", null)
                 .getDep(CO_DEPLOYMENT_NAME)) {
             @Override
             protected void before() {

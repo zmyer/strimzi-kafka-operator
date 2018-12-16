@@ -1,8 +1,22 @@
 # CHANGELOG
 
+## 0.10.0
+
+* Rename annotations to use the `strimzi.io` domain consistently:
+    * `cluster.operator.strimzi.io/delete-claim` → `strimzi.io/delete-claim` 
+    * `operator.strimzi.io/manual-rolling-update` → `strimzi.io/manual-rolling-update` 
+    * `operator.strimzi.io/delete-pod-and-pvc` → `strimzi.io/delete-pod-and-pvc`
+    * `operator.strimzi.io/generation` → `strimzi.io/generation`
+The old annotations are deprecated, but still functional.
+
 ## 0.9.0
 
 * Add possibility to label and annotate different resources (#1093)
+* Add support for TransactionalID in KafkaUser resource
+* Update to Kafka 2.0.1
+* Add maintenance time windows support for allowing CA certificates renewal rolling update started only in specific times (#1117)  
+* Add support for upgrading between Kafka versions (#1103). This removes support for `STRIMZI_DEFAULT_KAFKA_IMAGE` environment variable in the Cluster Operator, replacing it with `STRIMZI_KAFKA_IMAGES`.  
+
 
 ## 0.8.2
 

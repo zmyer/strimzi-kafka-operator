@@ -14,6 +14,9 @@ import io.fabric8.kubernetes.api.model.extensions.StatefulSet;
 import io.strimzi.api.kafka.model.InlineLogging;
 import io.strimzi.api.kafka.model.Kafka;
 import io.strimzi.api.kafka.model.KafkaBuilder;
+import io.strimzi.api.kafka.model.ProbeBuilder;
+import io.strimzi.api.kafka.model.TlsSidecar;
+import io.strimzi.api.kafka.model.TlsSidecarBuilder;
 import io.strimzi.api.kafka.model.TlsSidecarLogLevel;
 import io.strimzi.api.kafka.model.ZookeeperClusterSpec;
 import io.strimzi.certs.OpenSslCertManager;
@@ -42,12 +45,15 @@ import static org.junit.Assert.assertTrue;
 
 public class ZookeeperClusterTest {
 
+    private static final KafkaVersion.Lookup VERSIONS = new KafkaVersion.Lookup(emptyMap(), emptyMap(), emptyMap(), emptyMap());
     private final String namespace = "test";
     private final String cluster = "foo";
     private final int replicas = 3;
     private final String image = "image";
     private final int healthDelay = 120;
     private final int healthTimeout = 30;
+    private final int tlsHealthDelay = 120;
+    private final int tlsHealthTimeout = 30;
     private final Map<String, Object> metricsCmJson = singletonMap("animal", "wombat");
     private final Map<String, Object> configurationJson = emptyMap();
     private final InlineLogging kafkaLogConfigJson = new InlineLogging();
@@ -58,11 +64,23 @@ public class ZookeeperClusterTest {
     }
     private final Map<String, Object> zooConfigurationJson = singletonMap("foo", "bar");
 
-    private final Kafka ka = ResourceUtils.createKafkaCluster(namespace, cluster, replicas, image, healthDelay, healthTimeout, metricsCmJson, configurationJson, zooConfigurationJson, null, null, kafkaLogConfigJson, zooLogConfigJson);
-    private final ZookeeperCluster zc = ZookeeperCluster.fromCrd(ka);
+    private final TlsSidecar tlsSidecar = new TlsSidecarBuilder()
+            .withLivenessProbe(new ProbeBuilder().withInitialDelaySeconds(tlsHealthDelay).withTimeoutSeconds(tlsHealthTimeout).build())
+            .withReadinessProbe(new ProbeBuilder().withInitialDelaySeconds(tlsHealthDelay).withTimeoutSeconds(tlsHealthTimeout).build())
+            .build();
+
+    private final Kafka ka = new KafkaBuilder(ResourceUtils.createKafkaCluster(namespace, cluster, replicas, image, healthDelay, healthTimeout, metricsCmJson, configurationJson, zooConfigurationJson, null, null, kafkaLogConfigJson, zooLogConfigJson))
+            .editSpec()
+                .editZookeeper()
+                    .withTlsSidecar(tlsSidecar)
+                .endZookeeper()
+            .endSpec()
+            .build();
+
+    private final ZookeeperCluster zc = ZookeeperCluster.fromCrd(ka, VERSIONS);
 
     @Rule
-    public ResourceTester<Kafka, ZookeeperCluster> resourceTester = new ResourceTester<>(Kafka.class, ZookeeperCluster::fromCrd);
+    public ResourceTester<Kafka, ZookeeperCluster> resourceTester = new ResourceTester<>(Kafka.class, VERSIONS, ZookeeperCluster::fromCrd);
 
     @Test
     public void testMetricsConfigMap() {
@@ -158,19 +176,24 @@ public class ZookeeperClusterTest {
                         "foo=bar" + LINE_SEPARATOR;
         assertEquals(expectedConfig, AbstractModel.containerEnvVars(containers.get(0)).get(ZookeeperCluster.ENV_VAR_ZOOKEEPER_CONFIGURATION));
         // checks on the TLS sidecar container
-        assertEquals(ZookeeperClusterSpec.DEFAULT_TLS_SIDECAR_IMAGE, containers.get(1).getImage());
-        assertEquals(new Integer(replicas), Integer.valueOf(AbstractModel.containerEnvVars(containers.get(1)).get(ZookeeperCluster.ENV_VAR_ZOOKEEPER_NODE_COUNT)));
-        assertEquals(TlsSidecarLogLevel.NOTICE.toValue(), AbstractModel.containerEnvVars(containers.get(1)).get(ZookeeperCluster.ENV_VAR_TLS_SIDECAR_LOG_LEVEL));
-        assertEquals(ZookeeperCluster.CLUSTERING_PORT_NAME, containers.get(1).getPorts().get(0).getName());
-        assertEquals(new Integer(ZookeeperCluster.CLUSTERING_PORT), containers.get(1).getPorts().get(0).getContainerPort());
-        assertEquals(ZookeeperCluster.LEADER_ELECTION_PORT_NAME, containers.get(1).getPorts().get(1).getName());
-        assertEquals(new Integer(ZookeeperCluster.LEADER_ELECTION_PORT), containers.get(1).getPorts().get(1).getContainerPort());
-        assertEquals(ZookeeperCluster.CLIENT_PORT_NAME, containers.get(1).getPorts().get(2).getName());
-        assertEquals(new Integer(ZookeeperCluster.CLIENT_PORT), containers.get(1).getPorts().get(2).getContainerPort());
-        assertEquals(ZookeeperCluster.TLS_SIDECAR_NODES_VOLUME_NAME, containers.get(1).getVolumeMounts().get(0).getName());
-        assertEquals(ZookeeperCluster.TLS_SIDECAR_NODES_VOLUME_MOUNT, containers.get(1).getVolumeMounts().get(0).getMountPath());
-        assertEquals(ZookeeperCluster.TLS_SIDECAR_CLUSTER_CA_VOLUME_NAME, containers.get(1).getVolumeMounts().get(1).getName());
-        assertEquals(ZookeeperCluster.TLS_SIDECAR_CLUSTER_CA_VOLUME_MOUNT, containers.get(1).getVolumeMounts().get(1).getMountPath());
+        Container tlsSidecarContainer = containers.get(1);
+        assertEquals(ZookeeperClusterSpec.DEFAULT_TLS_SIDECAR_IMAGE, tlsSidecarContainer.getImage());
+        assertEquals(new Integer(replicas), Integer.valueOf(AbstractModel.containerEnvVars(tlsSidecarContainer).get(ZookeeperCluster.ENV_VAR_ZOOKEEPER_NODE_COUNT)));
+        assertEquals(TlsSidecarLogLevel.NOTICE.toValue(), AbstractModel.containerEnvVars(tlsSidecarContainer).get(ModelUtils.TLS_SIDECAR_LOG_LEVEL));
+        assertEquals(ZookeeperCluster.CLUSTERING_PORT_NAME, tlsSidecarContainer.getPorts().get(0).getName());
+        assertEquals(new Integer(ZookeeperCluster.CLUSTERING_PORT), tlsSidecarContainer.getPorts().get(0).getContainerPort());
+        assertEquals(ZookeeperCluster.LEADER_ELECTION_PORT_NAME, tlsSidecarContainer.getPorts().get(1).getName());
+        assertEquals(new Integer(ZookeeperCluster.LEADER_ELECTION_PORT), tlsSidecarContainer.getPorts().get(1).getContainerPort());
+        assertEquals(ZookeeperCluster.CLIENT_PORT_NAME, tlsSidecarContainer.getPorts().get(2).getName());
+        assertEquals(new Integer(ZookeeperCluster.CLIENT_PORT), tlsSidecarContainer.getPorts().get(2).getContainerPort());
+        assertEquals(ZookeeperCluster.TLS_SIDECAR_NODES_VOLUME_NAME, tlsSidecarContainer.getVolumeMounts().get(0).getName());
+        assertEquals(ZookeeperCluster.TLS_SIDECAR_NODES_VOLUME_MOUNT, tlsSidecarContainer.getVolumeMounts().get(0).getMountPath());
+        assertEquals(ZookeeperCluster.TLS_SIDECAR_CLUSTER_CA_VOLUME_NAME, tlsSidecarContainer.getVolumeMounts().get(1).getName());
+        assertEquals(ZookeeperCluster.TLS_SIDECAR_CLUSTER_CA_VOLUME_MOUNT, tlsSidecarContainer.getVolumeMounts().get(1).getMountPath());
+        assertEquals(new Integer(tlsHealthDelay), tlsSidecarContainer.getReadinessProbe().getInitialDelaySeconds());
+        assertEquals(new Integer(tlsHealthTimeout), tlsSidecarContainer.getReadinessProbe().getTimeoutSeconds());
+        assertEquals(new Integer(tlsHealthDelay), tlsSidecarContainer.getLivenessProbe().getInitialDelaySeconds());
+        assertEquals(new Integer(tlsHealthTimeout), tlsSidecarContainer.getLivenessProbe().getTimeoutSeconds());
     }
 
     /**
@@ -185,7 +208,7 @@ public class ZookeeperClusterTest {
                     .endKafka()
                 .endSpec()
             .build();
-        ZookeeperCluster zc = ZookeeperCluster.fromCrd(ka);
+        ZookeeperCluster zc = ZookeeperCluster.fromCrd(ka, VERSIONS);
         StatefulSet ss = zc.generateStatefulSet(true);
         assertFalse(ZookeeperCluster.deleteClaim(ss));
 
@@ -196,7 +219,7 @@ public class ZookeeperClusterTest {
                     .endKafka()
                 .endSpec()
             .build();
-        zc = ZookeeperCluster.fromCrd(ka);
+        zc = ZookeeperCluster.fromCrd(ka, VERSIONS);
         ss = zc.generateStatefulSet(true);
         assertFalse(ZookeeperCluster.deleteClaim(ss));
 
@@ -207,7 +230,7 @@ public class ZookeeperClusterTest {
                     .endZookeeper()
                 .endSpec()
             .build();
-        zc = ZookeeperCluster.fromCrd(ka);
+        zc = ZookeeperCluster.fromCrd(ka, VERSIONS);
         ss = zc.generateStatefulSet(true);
         assertTrue(ZookeeperCluster.deleteClaim(ss));
     }
@@ -257,6 +280,7 @@ public class ZookeeperClusterTest {
                 asList(2, "foo-zookeeper-0.foo-zookeeper-nodes.test.svc.cluster.local"),
                 asList(2, "foo-zookeeper-client"),
                 asList(2, "foo-zookeeper-client.test"),
+                asList(2, "foo-zookeeper-client.test.svc"),
                 asList(2, "foo-zookeeper-client.test.svc.cluster.local")),
                 new HashSet<Object>(cert.getSubjectAlternativeNames()));
 
@@ -309,7 +333,7 @@ public class ZookeeperClusterTest {
                     .endZookeeper()
                 .endSpec()
                 .build();
-        ZookeeperCluster zc = ZookeeperCluster.fromCrd(kafkaAssembly);
+        ZookeeperCluster zc = ZookeeperCluster.fromCrd(kafkaAssembly, VERSIONS);
 
         // Check StatefulSet
         StatefulSet ss = zc.generateStatefulSet(true);

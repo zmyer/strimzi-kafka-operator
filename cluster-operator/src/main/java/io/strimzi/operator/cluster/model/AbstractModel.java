@@ -29,8 +29,6 @@ import io.fabric8.kubernetes.api.model.PodSecurityContextBuilder;
 import io.fabric8.kubernetes.api.model.Probe;
 import io.fabric8.kubernetes.api.model.ProbeBuilder;
 import io.fabric8.kubernetes.api.model.Quantity;
-import io.fabric8.kubernetes.api.model.ResourceRequirements;
-import io.fabric8.kubernetes.api.model.ResourceRequirementsBuilder;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.SecretBuilder;
 import io.fabric8.kubernetes.api.model.SecretVolumeSource;
@@ -59,7 +57,7 @@ import io.strimzi.api.kafka.model.Logging;
 import io.strimzi.api.kafka.model.PersistentClaimStorage;
 import io.strimzi.api.kafka.model.Resources;
 import io.strimzi.api.kafka.model.Storage;
-import io.strimzi.operator.cluster.ClusterOperator;
+import io.strimzi.operator.common.Annotations;
 import io.strimzi.operator.common.model.Labels;
 import io.vertx.core.json.JsonObject;
 import org.apache.logging.log4j.LogManager;
@@ -78,8 +76,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import static io.strimzi.api.kafka.model.Quantities.normalizeCpu;
-import static io.strimzi.api.kafka.model.Quantities.normalizeMemory;
 import static java.util.Arrays.asList;
 
 public abstract class AbstractModel {
@@ -89,7 +85,8 @@ public abstract class AbstractModel {
     protected static final int CERTS_EXPIRATION_DAYS = 365;
     protected static final String DEFAULT_JVM_XMS = "128M";
 
-    private static final String VOLUME_MOUNT_HACK_IMAGE = "busybox";
+    private static final String VOLUME_MOUNT_HACK_IMAGE =
+            System.getenv().getOrDefault("STRIMZI_VOLUME_MOUNT_INIT_IMAGE", "busybox");
     protected static final String VOLUME_MOUNT_HACK_NAME = "volume-mount-hack";
     private static final Long VOLUME_MOUNT_HACK_USERID = 1001L;
     private static final Long VOLUME_MOUNT_HACK_GROUPID = 0L;
@@ -101,9 +98,15 @@ public abstract class AbstractModel {
     public static final String ENV_VAR_KAFKA_JVM_PERFORMANCE_OPTS = "KAFKA_JVM_PERFORMANCE_OPTS";
     public static final String ENV_VAR_DYNAMIC_HEAP_MAX = "DYNAMIC_HEAP_MAX";
     public static final String NETWORK_POLICY_KEY_SUFFIX = "-network-policy";
+    public static final String ENV_VAR_KAFKA_GC_LOG_OPTS = "KAFKA_GC_LOG_OPTS";
+    public static final String ENV_VAR_STRIMZI_GC_LOG_OPTS = "STRIMZI_GC_LOG_OPTS";
 
-    private static final String DELETE_CLAIM_ANNOTATION =
-            ClusterOperator.STRIMZI_CLUSTER_OPERATOR_DOMAIN + "/delete-claim";
+    private static final String ANNO_STRIMZI_IO_DELETE_CLAIM = Annotations.STRIMZI_DOMAIN + "/delete-claim";
+    @Deprecated
+    private static final String ANNO_CO_STRIMZI_IO_DELETE_CLAIM = "cluster.operator.strimzi.io/delete-claim";
+
+    protected static final String DEFAULT_KAFKA_GC_LOGGING = "-verbose:gc -XX:+PrintGCDetails -XX:+PrintGCDateStamps -XX:+PrintGCTimeStamps";
+    protected static final String DEFAULT_STRIMZI_GC_LOGGING = "-XX:NativeMemoryTracking=summary -verbose:gc -XX:+PrintGCDetails -XX:+PrintGCDateStamps";
 
     protected final String cluster;
     protected final String namespace;
@@ -133,6 +136,7 @@ public abstract class AbstractModel {
     protected String ancillaryConfigName;
     protected String logConfigName;
 
+
     protected Storage storage;
 
     protected AbstractConfiguration configuration;
@@ -149,8 +153,9 @@ public abstract class AbstractModel {
     private List<Toleration> tolerations;
 
     protected Map validLoggerFields;
-    private String[] validLoggerValues = new String[]{"INFO", "ERROR", "WARN", "TRACE", "DEBUG", "FATAL", "OFF" };
+    private final String[] validLoggerValues = new String[]{"INFO", "ERROR", "WARN", "TRACE", "DEBUG", "FATAL", "OFF" };
     private Logging logging;
+    protected boolean gcLoggingDisabled;
 
     // Templates
     protected Map<String, String> templateStatefulSetLabels;
@@ -258,6 +263,14 @@ public abstract class AbstractModel {
 
     protected void setMetricsEnabled(boolean isMetricsEnabled) {
         this.isMetricsEnabled = isMetricsEnabled;
+    }
+
+    public String getGcLoggingOptions() {
+        return gcLoggingDisabled ? " " : DEFAULT_KAFKA_GC_LOGGING;
+    }
+
+    protected void setGcLoggingDisabled(boolean gcLoggingDisabled) {
+        this.gcLoggingDisabled = gcLoggingDisabled;
     }
 
 
@@ -681,17 +694,6 @@ public abstract class AbstractModel {
         return s;
     }
 
-    protected Probe createExecProbe(String command, int initialDelay, int timeout) {
-        Probe probe = new ProbeBuilder().withNewExec()
-                .withCommand(command)
-                .endExec()
-                .withInitialDelaySeconds(initialDelay)
-                .withTimeoutSeconds(timeout)
-                .build();
-        log.trace("Created exec probe {}", probe);
-        return probe;
-    }
-
     protected Probe createTcpSocketProbe(int port, int initialDelay, int timeout) {
         Probe probe = new ProbeBuilder()
                 .withNewTcpSocket()
@@ -762,6 +764,7 @@ public abstract class AbstractModel {
     }
 
     protected StatefulSet createStatefulSet(
+            Map<String, String> annotations,
             List<Volume> volumes,
             List<PersistentVolumeClaim> volumeClaims,
             List<VolumeMount> volumeMounts,
@@ -770,9 +773,9 @@ public abstract class AbstractModel {
             List<Container> containers,
             boolean isOpenShift) {
 
-        Map<String, String> annotations = new HashMap<>();
+        annotations = new HashMap<>(annotations);
 
-        annotations.put(DELETE_CLAIM_ANNOTATION,
+        annotations.put(ANNO_STRIMZI_IO_DELETE_CLAIM,
                 String.valueOf(storage instanceof PersistentClaimStorage
                         && ((PersistentClaimStorage) storage).isDeleteClaim()));
 
@@ -919,32 +922,6 @@ public abstract class AbstractModel {
                 (u, v) -> v));
     }
 
-    public static ResourceRequirements resources(Resources resources) {
-        if (resources != null) {
-            ResourceRequirementsBuilder builder = new ResourceRequirementsBuilder();
-            CpuMemory limits = resources.getLimits();
-            if (limits != null
-                    && limits.milliCpuAsInt() > 0) {
-                builder.addToLimits("cpu", new Quantity(normalizeCpu(limits.getMilliCpu())));
-            }
-            if (limits != null
-                    && limits.memoryAsLong() > 0) {
-                builder.addToLimits("memory", new Quantity(normalizeMemory(limits.getMemory())));
-            }
-            CpuMemory requests = resources.getRequests();
-            if (requests != null
-                    && requests.milliCpuAsInt() > 0) {
-                builder.addToRequests("cpu", new Quantity(normalizeCpu(requests.getMilliCpu())));
-            }
-            if (requests != null
-                    && requests.memoryAsLong() > 0) {
-                builder.addToRequests("memory", new Quantity(normalizeMemory(requests.getMemory())));
-            }
-            return builder.build();
-        }
-        return null;
-    }
-
     public void setResources(Resources resources) {
         this.resources = resources;
     }
@@ -1060,9 +1037,9 @@ public abstract class AbstractModel {
     }
 
     public static boolean deleteClaim(StatefulSet ss) {
-        if (!ss.getSpec().getVolumeClaimTemplates().isEmpty()
-                && ss.getMetadata().getAnnotations() != null) {
-            return Boolean.valueOf(ss.getMetadata().getAnnotations().computeIfAbsent(DELETE_CLAIM_ANNOTATION, s -> "false"));
+        if (!ss.getSpec().getVolumeClaimTemplates().isEmpty()) {
+            return Annotations.booleanAnnotation(ss, ANNO_STRIMZI_IO_DELETE_CLAIM,
+                    false, ANNO_CO_STRIMZI_IO_DELETE_CLAIM);
         } else {
             return false;
         }

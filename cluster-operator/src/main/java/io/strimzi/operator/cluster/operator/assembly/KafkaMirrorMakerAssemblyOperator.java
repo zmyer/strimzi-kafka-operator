@@ -14,6 +14,8 @@ import io.strimzi.api.kafka.model.ExternalLogging;
 import io.strimzi.api.kafka.model.KafkaMirrorMaker;
 import io.strimzi.certs.CertManager;
 import io.strimzi.operator.cluster.model.KafkaMirrorMakerCluster;
+import io.strimzi.operator.cluster.model.KafkaVersion;
+import io.strimzi.operator.common.Annotations;
 import io.strimzi.operator.common.Reconciliation;
 import io.strimzi.operator.common.model.Labels;
 import io.strimzi.operator.common.model.ResourceType;
@@ -42,10 +44,12 @@ import java.util.Map;
 public class KafkaMirrorMakerAssemblyOperator extends AbstractAssemblyOperator<KubernetesClient, KafkaMirrorMaker, KafkaMirrorMakerList, DoneableKafkaMirrorMaker, Resource<KafkaMirrorMaker, DoneableKafkaMirrorMaker>> {
 
     private static final Logger log = LogManager.getLogger(KafkaMirrorMakerAssemblyOperator.class.getName());
+    public static final String ANNO_STRIMZI_IO_LOGGING = Annotations.STRIMZI_DOMAIN + "/logging";
 
     private final DeploymentOperator deploymentOperations;
     private final ConfigMapOperator configMapOperations;
     private final ServiceOperator serviceOperations;
+    private final KafkaVersion.Lookup versions;
 
     /**
      * @param vertx                      The Vertx instance
@@ -62,11 +66,13 @@ public class KafkaMirrorMakerAssemblyOperator extends AbstractAssemblyOperator<K
                                             ConfigMapOperator configMapOperations,
                                             NetworkPolicyOperator networkPolicyOperator,
                                             DeploymentOperator deploymentOperations,
-                                            ServiceOperator serviceOperations) {
+                                            ServiceOperator serviceOperations,
+                                            KafkaVersion.Lookup versions) {
         super(vertx, isOpenShift, ResourceType.MIRRORMAKER, certManager, mirrorMakerOperator, secretOperations, networkPolicyOperator);
         this.deploymentOperations = deploymentOperations;
         this.configMapOperations = configMapOperations;
         this.serviceOperations = serviceOperations;
+        this.versions = versions;
     }
 
     @Override
@@ -79,7 +85,7 @@ public class KafkaMirrorMakerAssemblyOperator extends AbstractAssemblyOperator<K
             return Future.failedFuture("Spec cannot be null");
         }
         try {
-            mirror = KafkaMirrorMakerCluster.fromCrd(assemblyResource);
+            mirror = KafkaMirrorMakerCluster.fromCrd(assemblyResource, versions);
         } catch (Exception e) {
             return Future.failedFuture(e);
         }
@@ -89,7 +95,7 @@ public class KafkaMirrorMakerAssemblyOperator extends AbstractAssemblyOperator<K
                 null);
 
         Map<String, String> annotations = new HashMap();
-        annotations.put("strimzi.io/logging", logAndMetricsConfigMap.getData().get(mirror.ANCILLARY_CM_KEY_LOG_CONFIG));
+        annotations.put(ANNO_STRIMZI_IO_LOGGING, logAndMetricsConfigMap.getData().get(mirror.ANCILLARY_CM_KEY_LOG_CONFIG));
 
         log.debug("{}: Updating Kafka Mirror Maker cluster", reconciliation, name, namespace);
         return deploymentOperations.scaleDown(namespace, mirror.getName(), mirror.getReplicas())

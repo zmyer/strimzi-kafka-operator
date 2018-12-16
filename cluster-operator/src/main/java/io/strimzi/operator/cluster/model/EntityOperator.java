@@ -16,9 +16,7 @@ import io.fabric8.kubernetes.api.model.extensions.DeploymentStrategyBuilder;
 import io.strimzi.api.kafka.model.EntityOperatorSpec;
 import io.strimzi.api.kafka.model.Kafka;
 import io.strimzi.api.kafka.model.KafkaResources;
-import io.strimzi.api.kafka.model.Resources;
 import io.strimzi.api.kafka.model.TlsSidecar;
-import io.strimzi.api.kafka.model.TlsSidecarLogLevel;
 import io.strimzi.api.kafka.model.template.EntityOperatorTemplate;
 import io.strimzi.certs.CertAndKey;
 import io.strimzi.operator.common.model.Labels;
@@ -47,7 +45,6 @@ public class EntityOperator extends AbstractModel {
 
     // Entity Operator configuration keys
     public static final String ENV_VAR_ZOOKEEPER_CONNECT = "STRIMZI_ZOOKEEPER_CONNECT";
-    public static final String ENV_VAR_TLS_SIDECAR_LOG_LEVEL = "TLS_SIDECAR_LOG_LEVEL";
     public static final String EO_CLUSTER_ROLE_NAME = "strimzi-entity-operator";
 
     private String zookeeperConnect;
@@ -164,7 +161,7 @@ public class EntityOperator extends AbstractModel {
         return null;
     }
 
-    public Deployment generateDeployment(boolean isOpenShift) {
+    public Deployment generateDeployment(boolean isOpenShift, Map<String, String> annotations) {
 
         if (!isDeployed()) {
             log.warn("Topic and/or User Operators not declared: Entity Operator will not be deployed");
@@ -178,7 +175,7 @@ public class EntityOperator extends AbstractModel {
         return createDeployment(
                 updateStrategy,
                 Collections.emptyMap(),
-                Collections.emptyMap(),
+                annotations,
                 getMergedAffinity(),
                 getInitContainers(),
                 getContainers(),
@@ -197,18 +194,18 @@ public class EntityOperator extends AbstractModel {
             containers.addAll(userOperator.getContainers());
         }
 
-        String tlsSidecarImage = (tlsSidecar != null && tlsSidecar.getImage() != null) ?
-                tlsSidecar.getImage() : EntityOperatorSpec.DEFAULT_TLS_SIDECAR_IMAGE;
-
-        Resources tlsSidecarResources = (tlsSidecar != null) ? tlsSidecar.getResources() : null;
-
-        TlsSidecarLogLevel tlsSidecarLogLevel = (tlsSidecar != null) ? tlsSidecar.getLogLevel() : TlsSidecarLogLevel.NOTICE;
+        String tlsSidecarImage = EntityOperatorSpec.DEFAULT_TLS_SIDECAR_IMAGE;
+        if (tlsSidecar != null && tlsSidecar.getImage() != null) {
+            tlsSidecarImage = tlsSidecar.getImage();
+        }
 
         Container tlsSidecarContainer = new ContainerBuilder()
                 .withName(TLS_SIDECAR_NAME)
                 .withImage(tlsSidecarImage)
-                .withResources(resources(tlsSidecarResources))
-                .withEnv(asList(buildEnvVar(ENV_VAR_TLS_SIDECAR_LOG_LEVEL, tlsSidecarLogLevel.toValue()),
+                .withLivenessProbe(ModelUtils.tlsSidecarLivenessProbe(tlsSidecar))
+                .withReadinessProbe(ModelUtils.tlsSidecarReadinessProbe(tlsSidecar))
+                .withResources(ModelUtils.tlsSidecarResources(tlsSidecar))
+                .withEnv(asList(ModelUtils.tlsSidecarLogEnvVar(tlsSidecar),
                         buildEnvVar(ENV_VAR_ZOOKEEPER_CONNECT, zookeeperConnect)))
                 .withVolumeMounts(createVolumeMount(TLS_SIDECAR_EO_CERTS_VOLUME_NAME, TLS_SIDECAR_EO_CERTS_VOLUME_MOUNT),
                         createVolumeMount(TLS_SIDECAR_CA_CERTS_VOLUME_NAME, TLS_SIDECAR_CA_CERTS_VOLUME_MOUNT))
@@ -233,8 +230,10 @@ public class EntityOperator extends AbstractModel {
     }
 
     /**
-     * Generate the Secret containing CA self-signed certificates for internal communication
-     * It also contains the private key-certificate (signed by internal CA) for communicating with Zookeeper and Kafka
+     * Generate the Secret containing the Entity Operator certificate signed by the cluster CA certificate used for TLS based
+     * internal communication with Kafka and Zookeeper.
+     * It also contains the related Entity Operator private key.
+     *
      * @return The generated Secret
      */
     public Secret generateSecret(ClusterCa clusterCa) {

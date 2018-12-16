@@ -15,6 +15,7 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.dsl.MixedOperation;
 import io.fabric8.kubernetes.client.dsl.RollableScalableResource;
 import io.strimzi.operator.cluster.model.AbstractModel;
+import io.strimzi.operator.common.Annotations;
 import io.strimzi.operator.common.operator.resource.AbstractScalableResourceOperator;
 import io.strimzi.operator.common.operator.resource.PodOperator;
 import io.strimzi.operator.common.operator.resource.PvcOperator;
@@ -27,9 +28,11 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Predicate;
 
 /**
- * Operations for {@code StatefulSets}s, which supports {@link #maybeRollingUpdate(StatefulSet, boolean)}
+ * Operations for {@code StatefulSets}s, which supports {@link #maybeRollingUpdate(StatefulSet, Predicate)}
  * in addition to the usual operations.
  */
 public abstract class StatefulSetOperator extends AbstractScalableResourceOperator<KubernetesClient, StatefulSet, StatefulSetList, DoneableStatefulSet, RollableScalableResource<StatefulSet, DoneableStatefulSet>> {
@@ -41,7 +44,7 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
     private static final Logger log = LogManager.getLogger(StatefulSetOperator.class.getName());
     private final PodOperator podOperations;
     private final PvcOperator pvcOperations;
-    private final long operationTimeoutMs;
+    protected final long operationTimeoutMs;
 
     /**
      * Constructor
@@ -71,7 +74,7 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
      * once the pod has been recreated then given {@code isReady} function will be polled until it returns true,
      * before the process proceeds with the pod with the next higher number.
      */
-    public Future<Void> maybeRollingUpdate(StatefulSet ss, boolean forceRestart) {
+    public Future<Void> maybeRollingUpdate(StatefulSet ss, Predicate<Pod> podRestart) {
         String namespace = ss.getMetadata().getNamespace();
         String name = ss.getMetadata().getName();
         final int replicas = ss.getSpec().getReplicas();
@@ -80,7 +83,7 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
         // Then for each replica, maybe restart it
         for (int i = 0; i < replicas; i++) {
             String podName = name + "-" + i;
-            f = f.compose(ignored -> maybeRestartPod(ss, podName, forceRestart));
+            f = f.compose(ignored -> maybeRestartPod(ss, podName, podRestart));
         }
         return f;
     }
@@ -95,11 +98,14 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
             String podName = name + "-" + i;
             String pvcName = AbstractModel.getPersistentVolumeClaimName(name, i);
             Pod pod = podOperations.get(namespace, podName);
-            String value = pod.getMetadata().getAnnotations().get(ANNOTATION_MANUAL_DELETE_POD_AND_PVC);
-            if (value != null && Boolean.valueOf(value)) {
-                f = f.compose(ignored -> deletePvc(ss, pvcName))
-                        .compose(ignored -> maybeRestartPod(ss, podName, true));
 
+            if (pod != null) {
+                if (Annotations.booleanAnnotation(pod, ANNO_STRIMZI_IO_DELETE_POD_AND_PVC,
+                        false, ANNO_OP_STRIMZI_IO_DELETE_POD_AND_PVC)) {
+                    f = f.compose(ignored -> deletePvc(ss, pvcName))
+                            .compose(ignored -> maybeRestartPod(ss, podName, p -> true));
+
+                }
             }
         }
         return f;
@@ -119,16 +125,13 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
         return f;
     }
 
-    public Future<Void> maybeRestartPod(StatefulSet ss, String podName, boolean forceRestart) {
+    public Future<Void> maybeRestartPod(StatefulSet ss, String podName, Predicate<Pod> podRestart) {
         long pollingIntervalMs = 1_000;
         long timeoutMs = operationTimeoutMs;
         String namespace = ss.getMetadata().getNamespace();
         String name = ss.getMetadata().getName();
-        if (isPodUpToDate(ss, podName) && !forceRestart) {
-            log.debug("Rolling update of {}/{}: pod {} has {}={}; no need to roll",
-                    namespace, name, podName, ANNOTATION_GENERATION, getSsGeneration(ss));
-            return Future.succeededFuture();
-        } else {
+        Pod pod = podOperations.get(ss.getMetadata().getNamespace(), podName);
+        if (podRestart.test(pod)) {
             Future<Void> result = Future.future();
             Future<ReconcileResult<Pod>> deleteFinished = Future.future();
             log.info("Rolling update of {}/{}: Rolling pod {}", namespace, name, podName);
@@ -162,18 +165,10 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
             });
             deleteFinished.compose(ix -> podOperations.readiness(namespace, podName, pollingIntervalMs, timeoutMs)).setHandler(result);
             return result;
+        } else {
+            log.debug("Rolling update of {}/{}: pod {} no need to roll", namespace, name, podName);
+            return Future.succeededFuture();
         }
-    }
-
-    protected boolean isPodUpToDate(StatefulSet ss, String podName) {
-        final int ssGeneration = getSsGeneration(ss);
-        // TODO this call is sync
-        int podGeneration = getPodGeneration(podOperations.get(ss.getMetadata().getNamespace(), podName));
-        log.debug("Rolling update of {}/{}: pod {} has {}={}; ss has {}={}",
-                ss.getMetadata().getNamespace(), ss.getMetadata().getName(), podName,
-                ANNOTATION_GENERATION, podGeneration,
-                ANNOTATION_GENERATION, ssGeneration);
-        return ssGeneration == podGeneration;
     }
 
     @Override
@@ -195,41 +190,34 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
     }
 
     private void setGeneration(StatefulSet desired, int nextGeneration) {
-        templateMetadata(desired).getAnnotations().put(ANNOTATION_GENERATION, String.valueOf(nextGeneration));
-    }
-
-    private static int getGeneration(ObjectMeta objectMeta) {
-        if (objectMeta.getAnnotations().get(ANNOTATION_GENERATION) == null) {
-            return NO_GENERATION;
-        }
-        String generationAnno = objectMeta.getAnnotations().get(ANNOTATION_GENERATION);
-        if (generationAnno == null) {
-            return NO_GENERATION;
-        } else {
-            return Integer.parseInt(generationAnno);
-        }
+        Map<String, String> annotations = Annotations.annotations(desired.getSpec().getTemplate());
+        annotations.remove(ANNO_OP_STRIMZI_IO_GENERATION);
+        annotations.put(ANNO_STRIMZI_IO_GENERATION, String.valueOf(nextGeneration));
     }
 
     protected void incrementGeneration(StatefulSet current, StatefulSet desired) {
-        final int generation = Integer.parseInt(templateMetadata(current).getAnnotations().getOrDefault(ANNOTATION_GENERATION, String.valueOf(INIT_GENERATION)));
+        final int generation = Annotations.intAnnotation(current.getSpec().getTemplate(), ANNO_STRIMZI_IO_GENERATION,
+                INIT_GENERATION, ANNO_OP_STRIMZI_IO_GENERATION);
         final int nextGeneration = generation + 1;
         setGeneration(desired, nextGeneration);
     }
 
     protected abstract boolean shouldIncrementGeneration(StatefulSet current, StatefulSet desired);
 
-    private static int getSsGeneration(StatefulSet resource) {
+    public static int getSsGeneration(StatefulSet resource) {
         if (resource == null) {
             return NO_GENERATION;
         }
-        return getGeneration(templateMetadata(resource));
+        return Annotations.intAnnotation(resource.getSpec().getTemplate(), ANNO_STRIMZI_IO_GENERATION,
+                NO_GENERATION, ANNO_OP_STRIMZI_IO_GENERATION);
     }
 
-    private static int getPodGeneration(Pod resource) {
+    public static int getPodGeneration(Pod resource) {
         if (resource == null) {
             return NO_GENERATION;
         }
-        return getGeneration(resource.getMetadata());
+        return Annotations.intAnnotation(resource, ANNO_STRIMZI_IO_GENERATION,
+                NO_GENERATION, ANNO_OP_STRIMZI_IO_GENERATION);
     }
 
     @Override
@@ -272,6 +260,7 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
         } else {
             setGeneration(desired, getSsGeneration(current));
         }
+
         // Don't scale via patch
         desired.getSpec().setReplicas(current.getSpec().getReplicas());
         if (log.isTraceEnabled()) {

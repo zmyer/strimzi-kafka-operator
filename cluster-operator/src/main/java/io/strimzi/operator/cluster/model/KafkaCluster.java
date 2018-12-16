@@ -47,11 +47,10 @@ import io.strimzi.api.kafka.model.KafkaResources;
 import io.strimzi.api.kafka.model.Logging;
 import io.strimzi.api.kafka.model.PersistentClaimStorage;
 import io.strimzi.api.kafka.model.Rack;
-import io.strimzi.api.kafka.model.Resources;
 import io.strimzi.api.kafka.model.TlsSidecar;
-import io.strimzi.api.kafka.model.TlsSidecarLogLevel;
 import io.strimzi.api.kafka.model.template.KafkaClusterTemplate;
 import io.strimzi.certs.CertAndKey;
+import io.strimzi.operator.common.Annotations;
 import io.strimzi.operator.common.model.Labels;
 import io.strimzi.operator.common.operator.resource.ClusterRoleBindingOperator;
 
@@ -66,6 +65,7 @@ import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 import static java.util.Arrays.asList;
+import static java.util.Collections.singletonMap;
 
 public class KafkaCluster extends AbstractModel {
 
@@ -91,8 +91,8 @@ public class KafkaCluster extends AbstractModel {
     private static final String ENV_VAR_KAFKA_AUTHORIZATION_SUPER_USERS = "KAFKA_AUTHORIZATION_SUPER_USERS";
     public static final String ENV_VAR_KAFKA_ZOOKEEPER_CONNECT = "KAFKA_ZOOKEEPER_CONNECT";
     private static final String ENV_VAR_KAFKA_METRICS_ENABLED = "KAFKA_METRICS_ENABLED";
-    protected static final String ENV_VAR_KAFKA_CONFIGURATION = "KAFKA_CONFIGURATION";
-    public static final String ENV_VAR_TLS_SIDECAR_LOG_LEVEL = "TLS_SIDECAR_LOG_LEVEL";
+
+    public static final String ENV_VAR_KAFKA_CONFIGURATION = "KAFKA_CONFIGURATION";
 
     protected static final int CLIENT_PORT = 9092;
     protected static final String CLIENT_PORT_NAME = "clients";
@@ -122,6 +122,13 @@ public class KafkaCluster extends AbstractModel {
     // Suffixes for secrets with certificates
     private static final String SECRET_BROKERS_SUFFIX = NAME_SUFFIX + "-brokers";
 
+    /** Records the Kafka version currently running inside Kafka StatefulSet */
+    public static final String ANNO_STRIMZI_IO_KAFKA_VERSION = Annotations.STRIMZI_DOMAIN + "/kafka-version";
+    /** Records the state of the Kafka upgrade process. Unset outside of upgrades. */
+    public static final String ANNO_STRIMZI_IO_FROM_VERSION = Annotations.STRIMZI_DOMAIN + "/from-version";
+    /** Records the state of the Kafka upgrade process. Unset outside of upgrades. */
+    public static final String ANNO_STRIMZI_IO_TO_VERSION = Annotations.STRIMZI_DOMAIN + "/to-version";
+
     // Kafka configuration
     private String zookeeperConnect;
     private Rack rack;
@@ -130,6 +137,7 @@ public class KafkaCluster extends AbstractModel {
     private KafkaListeners listeners;
     private KafkaAuthorization authorization;
     private SortedMap<Integer, String> externalAddresses = new TreeMap<>();
+    private KafkaVersion kafkaVersion;
 
     // Templates
     protected Map<String, String> templateExternalBootstrapServiceLabels;
@@ -166,7 +174,6 @@ public class KafkaCluster extends AbstractModel {
         this.serviceName = serviceName(cluster);
         this.headlessServiceName = headlessServiceName(cluster);
         this.ancillaryConfigName = metricAndLogConfigsName(cluster);
-        this.image = KafkaClusterSpec.DEFAULT_IMAGE;
         this.replicas = DEFAULT_REPLICAS;
         this.readinessTimeout = DEFAULT_HEALTHCHECK_TIMEOUT;
         this.readinessInitialDelay = DEFAULT_HEALTHCHECK_DELAY;
@@ -238,16 +245,16 @@ public class KafkaCluster extends AbstractModel {
         return KafkaResources.clientsCaCertificateSecretName(cluster);
     }
 
-    public static KafkaCluster fromCrd(Kafka kafkaAssembly) {
+    public static KafkaCluster fromCrd(Kafka kafkaAssembly, KafkaVersion.Lookup versions) {
         KafkaCluster result = new KafkaCluster(kafkaAssembly.getMetadata().getNamespace(),
                 kafkaAssembly.getMetadata().getName(),
                 Labels.fromResource(kafkaAssembly).withKind(kafkaAssembly.getKind()));
         result.setOwnerReference(kafkaAssembly);
         KafkaClusterSpec kafkaClusterSpec = kafkaAssembly.getSpec().getKafka();
         result.setReplicas(kafkaClusterSpec.getReplicas());
-        String image = kafkaClusterSpec.getImage();
+        String image = versions.kafkaImage(kafkaClusterSpec.getImage(), kafkaClusterSpec.getVersion());
         if (image == null) {
-            image = KafkaClusterSpec.DEFAULT_IMAGE;
+            throw new InvalidResourceException("Version is not supported");
         }
         result.setImage(image);
         if (kafkaClusterSpec.getReadinessProbe() != null) {
@@ -267,10 +274,11 @@ public class KafkaCluster extends AbstractModel {
         result.setInitImage(initImage);
         Logging logging = kafkaClusterSpec.getLogging();
         result.setLogging(logging == null ? new InlineLogging() : logging);
+        result.setGcLoggingDisabled(kafkaClusterSpec.getJvmOptions() == null ? false : kafkaClusterSpec.getJvmOptions().isGcLoggingDisabled());
         result.setJvmOptions(kafkaClusterSpec.getJvmOptions());
         result.setConfiguration(new KafkaConfiguration(kafkaClusterSpec.getConfig().entrySet()));
         Map<String, Object> metrics = kafkaClusterSpec.getMetrics();
-        if (metrics != null && !metrics.isEmpty()) {
+        if (metrics != null) {
             result.setMetricsEnabled(true);
             result.setMetricsConfig(metrics.entrySet());
         }
@@ -341,6 +349,7 @@ public class KafkaCluster extends AbstractModel {
             }
         }
 
+        result.kafkaVersion = versions.version(kafkaClusterSpec.getVersion());
         return result;
     }
 
@@ -558,6 +567,7 @@ public class KafkaCluster extends AbstractModel {
      */
     public StatefulSet generateStatefulSet(boolean isOpenShift) {
         return createStatefulSet(
+                singletonMap(ANNO_STRIMZI_IO_KAFKA_VERSION, kafkaVersion.version()),
                 getVolumes(isOpenShift),
                 getVolumeClaims(),
                 getVolumeMounts(),
@@ -568,9 +578,9 @@ public class KafkaCluster extends AbstractModel {
     }
 
     /**
-     * Generate the Secret containing CA self-signed certificate for TLS communication.
-     * It also contains the private key-certificate (signed by cluster CA) for each brokers as well as for communicating
-     * with Zookeeper as well
+     * Generate the Secret containing the Kafka brokers certificates signed by the cluster CA certificate used for TLS based
+     * internal communication with Zookeeper.
+     * It also contains the related Kafka brokers private keys.
      *
      * @return The generated Secret
      */
@@ -725,22 +735,22 @@ public class KafkaCluster extends AbstractModel {
                 .withPorts(getContainerPortList())
                 .withLivenessProbe(createTcpSocketProbe(REPLICATION_PORT, livenessInitialDelay, livenessTimeout))
                 .withReadinessProbe(createTcpSocketProbe(REPLICATION_PORT, readinessInitialDelay, readinessTimeout))
-                .withResources(resources(getResources()))
+                .withResources(ModelUtils.resources(getResources()))
                 .build();
 
-        String tlsSidecarImage = (tlsSidecar != null && tlsSidecar.getImage() != null) ?
-                tlsSidecar.getImage() : KafkaClusterSpec.DEFAULT_TLS_SIDECAR_IMAGE;
-
-        Resources tlsSidecarResources = (tlsSidecar != null) ? tlsSidecar.getResources() : null;
-
-        TlsSidecarLogLevel tlsSidecarLogLevel = (tlsSidecar != null) ? tlsSidecar.getLogLevel() : TlsSidecarLogLevel.NOTICE;
+        String tlsSidecarImage = KafkaClusterSpec.DEFAULT_TLS_SIDECAR_IMAGE;
+        if (tlsSidecar != null && tlsSidecar.getImage() != null) {
+            tlsSidecarImage = tlsSidecar.getImage();
+        }
 
         Container tlsSidecarContainer = new ContainerBuilder()
                 .withName(TLS_SIDECAR_NAME)
                 .withImage(tlsSidecarImage)
-                .withResources(resources(tlsSidecarResources))
+                .withLivenessProbe(ModelUtils.tlsSidecarLivenessProbe(tlsSidecar))
+                .withReadinessProbe(ModelUtils.tlsSidecarReadinessProbe(tlsSidecar))
+                .withResources(ModelUtils.tlsSidecarResources(tlsSidecar))
                 .withEnv(asList(buildEnvVar(ENV_VAR_KAFKA_ZOOKEEPER_CONNECT, zookeeperConnect),
-                        buildEnvVar(ENV_VAR_TLS_SIDECAR_LOG_LEVEL, tlsSidecarLogLevel.toValue())))
+                        ModelUtils.tlsSidecarLogEnvVar(tlsSidecar)))
                 .withVolumeMounts(createVolumeMount(BROKER_CERTS_VOLUME, TLS_SIDECAR_KAFKA_CERTS_VOLUME_MOUNT),
                         createVolumeMount(CLUSTER_CA_CERTS_VOLUME, TLS_SIDECAR_CLUSTER_CA_CERTS_VOLUME_MOUNT))
                 .build();
@@ -760,6 +770,8 @@ public class KafkaCluster extends AbstractModel {
     protected List<EnvVar> getEnvVars() {
         List<EnvVar> varList = new ArrayList<>();
         varList.add(buildEnvVar(ENV_VAR_KAFKA_METRICS_ENABLED, String.valueOf(isMetricsEnabled)));
+        varList.add(buildEnvVar(ENV_VAR_KAFKA_GC_LOG_OPTS, getGcLoggingOptions()));
+
         heapOptions(varList, 0.5, 5L * 1024L * 1024L * 1024L);
         jvmPerformanceOptions(varList);
 
@@ -1038,16 +1050,21 @@ public class KafkaCluster extends AbstractModel {
      * @return
      */
     public boolean isExposedWithTls() {
-        if (isExposed() && listeners.getExternal() instanceof KafkaListenerExternalRoute)   {
+        if (isExposed() && listeners.getExternal() instanceof KafkaListenerExternalRoute) {
             return true;
-        } else if (isExposed())   {
+        } else if (isExposed()) {
             if (listeners.getExternal() instanceof KafkaListenerExternalLoadBalancer) {
                 return ((KafkaListenerExternalLoadBalancer) listeners.getExternal()).isTls();
-            } else if (listeners.getExternal() instanceof KafkaListenerExternalNodePort)    {
+            } else if (listeners.getExternal() instanceof KafkaListenerExternalNodePort) {
                 return ((KafkaListenerExternalNodePort) listeners.getExternal()).isTls();
             }
         }
 
         return false;
+    }
+
+    @Override
+    public KafkaConfiguration getConfiguration() {
+        return (KafkaConfiguration) configuration;
     }
 }

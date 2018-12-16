@@ -13,12 +13,14 @@ import io.fabric8.kubernetes.api.model.extensions.Deployment;
 import io.strimzi.api.kafka.model.EphemeralStorage;
 import io.strimzi.api.kafka.model.InlineLogging;
 import io.strimzi.api.kafka.model.Kafka;
+import io.strimzi.api.kafka.model.ProbeBuilder;
 import io.strimzi.api.kafka.model.Storage;
+import io.strimzi.api.kafka.model.TlsSidecar;
+import io.strimzi.api.kafka.model.TlsSidecarBuilder;
+import io.strimzi.api.kafka.model.TlsSidecarLogLevel;
 import io.strimzi.api.kafka.model.TopicOperatorSpecBuilder;
 import io.strimzi.api.kafka.model.TopicOperatorSpec;
-import io.strimzi.certs.CertManager;
 import io.strimzi.operator.cluster.ResourceUtils;
-import io.strimzi.operator.common.operator.MockCertManager;
 
 import org.junit.AfterClass;
 import org.junit.Assert;
@@ -43,6 +45,8 @@ public class TopicOperatorTest {
     private final String image = "my-image:latest";
     private final int healthDelay = 120;
     private final int healthTimeout = 30;
+    private final int tlsHealthDelay = 120;
+    private final int tlsHealthTimeout = 30;
     private final Map<String, Object> metricsCm = singletonMap("animal", "wombat");
     private final Map<String, Object> kafkaConfig = singletonMap("foo", "bar");
     private final Map<String, Object> zooConfig = singletonMap("foo", "bar");
@@ -63,6 +67,11 @@ public class TopicOperatorTest {
     private final int tcZookeeperSessionTimeout = 20;
     private final int tcTopicMetadataMaxAttempts = 3;
 
+    private final TlsSidecar tlsSidecar = new TlsSidecarBuilder()
+            .withLivenessProbe(new ProbeBuilder().withInitialDelaySeconds(tlsHealthDelay).withTimeoutSeconds(tlsHealthTimeout).build())
+            .withReadinessProbe(new ProbeBuilder().withInitialDelaySeconds(tlsHealthDelay).withTimeoutSeconds(tlsHealthTimeout).build())
+            .build();
+
     private final TopicOperatorSpec topicOperator = new TopicOperatorSpecBuilder()
             .withWatchedNamespace(tcWatchedNamespace)
             .withImage(tcImage)
@@ -70,10 +79,9 @@ public class TopicOperatorTest {
             .withZookeeperSessionTimeoutSeconds(tcZookeeperSessionTimeout)
             .withTopicMetadataMaxAttempts(tcTopicMetadataMaxAttempts)
             .withLogging(topicOperatorLogging)
+            .withTlsSidecar(tlsSidecar)
             .build();
 
-
-    private final CertManager certManager = new MockCertManager();
     private final Kafka resource = ResourceUtils.createKafkaCluster(namespace, cluster, replicas, image, healthDelay, healthTimeout, metricsCm, kafkaConfig, zooConfig, storage, topicOperator, kafkaLogJson, zooLogJson);
     private final TopicOperator tc = TopicOperator.fromCrd(resource);
 
@@ -87,6 +95,7 @@ public class TopicOperatorTest {
         expected.add(new EnvVarBuilder().withName(TopicOperator.ENV_VAR_ZOOKEEPER_SESSION_TIMEOUT_MS).withValue(String.valueOf(tcZookeeperSessionTimeout * 1000)).build());
         expected.add(new EnvVarBuilder().withName(TopicOperator.ENV_VAR_TOPIC_METADATA_MAX_ATTEMPTS).withValue(String.valueOf(tcTopicMetadataMaxAttempts)).build());
         expected.add(new EnvVarBuilder().withName(TopicOperator.ENV_VAR_TLS_ENABLED).withValue(Boolean.toString(true)).build());
+        expected.add(new EnvVarBuilder().withName(TopicOperator.ENV_VAR_STRIMZI_GC_LOG_OPTS).withValue(TopicOperator.DEFAULT_STRIMZI_GC_LOGGING).build());
 
         return expected;
     }
@@ -171,10 +180,16 @@ public class TopicOperatorTest {
         assertEquals(TopicOperator.TLS_SIDECAR_EO_CERTS_VOLUME_MOUNT, containers.get(0).getVolumeMounts().get(1).getMountPath());
         assertLoggingConfig(dep);
         // checks on the TLS sidecar container
-        assertEquals(TopicOperatorSpec.DEFAULT_TLS_SIDECAR_IMAGE, containers.get(1).getImage());
-        assertEquals(TopicOperator.defaultZookeeperConnect(cluster), AbstractModel.containerEnvVars(containers.get(1)).get(TopicOperator.ENV_VAR_ZOOKEEPER_CONNECT));
-        assertEquals(TopicOperator.TLS_SIDECAR_EO_CERTS_VOLUME_NAME, containers.get(1).getVolumeMounts().get(0).getName());
-        assertEquals(TopicOperator.TLS_SIDECAR_EO_CERTS_VOLUME_MOUNT, containers.get(1).getVolumeMounts().get(0).getMountPath());
+        Container tlsSidecarContainer = containers.get(1);
+        assertEquals(TopicOperatorSpec.DEFAULT_TLS_SIDECAR_IMAGE, tlsSidecarContainer.getImage());
+        assertEquals(TopicOperator.defaultZookeeperConnect(cluster), AbstractModel.containerEnvVars(tlsSidecarContainer).get(TopicOperator.ENV_VAR_ZOOKEEPER_CONNECT));
+        assertEquals(TlsSidecarLogLevel.NOTICE.toValue(), AbstractModel.containerEnvVars(tlsSidecarContainer).get(ModelUtils.TLS_SIDECAR_LOG_LEVEL));
+        assertEquals(TopicOperator.TLS_SIDECAR_EO_CERTS_VOLUME_NAME, tlsSidecarContainer.getVolumeMounts().get(0).getName());
+        assertEquals(TopicOperator.TLS_SIDECAR_EO_CERTS_VOLUME_MOUNT, tlsSidecarContainer.getVolumeMounts().get(0).getMountPath());
+        assertEquals(new Integer(tlsHealthDelay), tlsSidecarContainer.getReadinessProbe().getInitialDelaySeconds());
+        assertEquals(new Integer(tlsHealthTimeout), tlsSidecarContainer.getReadinessProbe().getTimeoutSeconds());
+        assertEquals(new Integer(tlsHealthDelay), tlsSidecarContainer.getLivenessProbe().getInitialDelaySeconds());
+        assertEquals(new Integer(tlsHealthTimeout), tlsSidecarContainer.getLivenessProbe().getTimeoutSeconds());
     }
 
     @Test

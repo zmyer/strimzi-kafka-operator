@@ -43,6 +43,7 @@ import io.fabric8.kubernetes.api.model.extensions.NetworkPolicy;
 import io.fabric8.kubernetes.api.model.extensions.NetworkPolicyList;
 import io.fabric8.kubernetes.api.model.extensions.StatefulSet;
 import io.fabric8.kubernetes.api.model.extensions.StatefulSetList;
+import io.fabric8.kubernetes.api.model.extensions.StatefulSetStatus;
 import io.fabric8.kubernetes.client.CustomResource;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
@@ -109,6 +110,8 @@ public class MockKube {
     private final Map<String, ServiceAccount> serviceAccountDb = db(emptySet(), ServiceAccount.class, DoneableServiceAccount.class);
     private final Map<String, NetworkPolicy> policyDb = db(emptySet(), NetworkPolicy.class, DoneableNetworkPolicy.class);
     private final Map<String, Route> routeDb = db(emptySet(), Route.class, DoneableRoute.class);
+
+    private Map<String, List<String>> podsForDeployments = new HashMap<>();
 
     public MockKube withInitialCms(Set<ConfigMap> initialCms) {
         this.cmDb.putAll(db(initialCms, ConfigMap.class, DoneableConfigMap.class));
@@ -181,7 +184,7 @@ public class MockKube {
         MixedOperation<Service, ServiceList, DoneableService, Resource<Service, DoneableService>> mockSvc = buildServices();
         MixedOperation<Pod, PodList, DoneablePod, PodResource<Pod, DoneablePod>> mockPods = buildPods();
         MixedOperation<StatefulSet, StatefulSetList, DoneableStatefulSet, RollableScalableResource<StatefulSet, DoneableStatefulSet>> mockSs = buildStatefulSets(mockPods);
-        MixedOperation<Deployment, DeploymentList, DoneableDeployment, ScalableResource<Deployment, DoneableDeployment>> mockDep = buildDeployments();
+        MixedOperation<Deployment, DeploymentList, DoneableDeployment, ScalableResource<Deployment, DoneableDeployment>> mockDep = buildDeployments(mockPods);
         MixedOperation<Secret, SecretList, DoneableSecret, Resource<Secret, DoneableSecret>> mockSecrets = buildSecrets();
         MixedOperation<ServiceAccount, ServiceAccountList, DoneableServiceAccount, Resource<ServiceAccount, DoneableServiceAccount>> mockServiceAccounts = buildServiceAccount();
         MixedOperation<NetworkPolicy, NetworkPolicyList, DoneableNetworkPolicy, Resource<NetworkPolicy, DoneableNetworkPolicy>> mockNetworkPolicy = buildNetworkPolicy();
@@ -253,16 +256,69 @@ public class MockKube {
         }
     }
 
-    private MixedOperation<Deployment, DeploymentList, DoneableDeployment, ScalableResource<Deployment, DoneableDeployment>> buildDeployments() {
+    private MixedOperation<Deployment, DeploymentList, DoneableDeployment, ScalableResource<Deployment, DoneableDeployment>> buildDeployments(MixedOperation<Pod, PodList, DoneablePod, PodResource<Pod, DoneablePod>> mockPods) {
         return new AbstractMockBuilder<Deployment, DeploymentList, DoneableDeployment, ScalableResource<Deployment, DoneableDeployment>>(
             Deployment.class, DeploymentList.class, DoneableDeployment.class, castClass(ScalableResource.class), depDb) {
             @Override
             protected void nameScopedMocks(ScalableResource<Deployment, DoneableDeployment> resource, String resourceName) {
                 mockGet(resourceName, resource);
-                mockCreate(resourceName, resource);
+                mockWatch(resourceName, resource);
+                //mockCreate(resourceName, resource);
+                when(resource.create(any())).thenAnswer(invocation -> {
+                    checkNotExists(resourceName);
+                    Deployment deployment = invocation.getArgument(0);
+                    LOGGER.debug("create {} {} -> {}", resourceType, resourceName, deployment);
+                    depDb.put(resourceName, copyResource(deployment));
+                    for (int i = 0; i < deployment.getSpec().getReplicas(); i++) {
+                        String uuid = UUID.randomUUID().toString();
+                        String podName = deployment.getMetadata().getName() + "-" + uuid;
+                        LOGGER.debug("create Pod {} because it's in Deployment {}", podName, resourceName);
+                        Pod pod = new PodBuilder()
+                                .withNewMetadataLike(deployment.getSpec().getTemplate().getMetadata())
+                                    .withUid(uuid)
+                                    .withNamespace(deployment.getMetadata().getNamespace())
+                                    .withName(podName)
+                                .endMetadata()
+                                .withNewSpecLike(deployment.getSpec().getTemplate().getSpec()).endSpec()
+                                .build();
+                        mockPods.inNamespace(deployment.getMetadata().getNamespace()).withName(podName).create(pod);
+                        podsForDeployments.computeIfAbsent(deployment.getMetadata().getName(), s -> new ArrayList<>());
+                        podsForDeployments.get(deployment.getMetadata().getName()).add(podName);
+                    }
+                    return deployment;
+                });
                 mockCascading(resource);
-                mockPatch(resourceName, resource);
+                //mockPatch(resourceName, resource);
                 mockDelete(resourceName, resource);
+                when(resource.patch(any())).thenAnswer(invocation -> {
+                    Deployment deployment = invocation.getArgument(0);
+                    LOGGER.debug("patched {} {} -> {}", resourceType, resourceName, deployment);
+                    depDb.put(resourceName, copyResource(deployment));
+                    List<String> newPodNames = new ArrayList<>();
+                    for (int i = 0; i < deployment.getSpec().getReplicas(); i++) {
+                        // create a "new" Pod
+                        String uuid = UUID.randomUUID().toString();
+                        String newPodName = deployment.getMetadata().getName() + "-" + uuid;
+
+                        Pod newPod = new PodBuilder()
+                                .withNewMetadataLike(deployment.getSpec().getTemplate().getMetadata())
+                                    .withUid(uuid)
+                                    .withNamespace(deployment.getMetadata().getNamespace())
+                                    .withName(newPodName)
+                                .endMetadata()
+                                .withNewSpecLike(deployment.getSpec().getTemplate().getSpec()).endSpec()
+                                .build();
+                        mockPods.inNamespace(deployment.getMetadata().getNamespace()).withName(newPodName).create(newPod);
+                        newPodNames.add(newPodName);
+
+                        // delete the first one "old" Pod
+                        String podToDelete = podsForDeployments.get(deployment.getMetadata().getName()).remove(0);
+                        mockPods.inNamespace(deployment.getMetadata().getNamespace()).withName(podToDelete).delete();
+                    }
+                    podsForDeployments.get(deployment.getMetadata().getName()).addAll(newPodNames);
+
+                    return deployment;
+                });
             }
         }.build();
     }
@@ -295,7 +351,9 @@ public class MockKube {
                     checkNotExists(resourceName);
                     StatefulSet argument = cinvocation.getArgument(0);
                     LOGGER.debug("create {} {} -> {}", resourceType, resourceName, argument);
-                    ssDb.put(resourceName, copyResource(argument));
+                    StatefulSet value = copyResource(argument);
+                    value.setStatus(new StatefulSetStatus());
+                    ssDb.put(resourceName, value);
                     for (int i = 0; i < argument.getSpec().getReplicas(); i++) {
                         final int podNum = i;
                         String podName = argument.getMetadata().getName() + "-" + podNum;
@@ -405,7 +463,7 @@ public class MockKube {
                                 .withNewMetadataLike(templateMeta)
                                 .withUid(UUID.randomUUID().toString())
                                 .withNamespace(podNamespace)
-                                .withNamespace(podName)
+                                .withName(podName)
                                 .endMetadata()
                                 .withNewSpecLike(statefulSet.getSpec().getTemplate().getSpec()).endSpec()
                                 .done();

@@ -25,7 +25,10 @@ import io.strimzi.api.kafka.model.KafkaClusterSpec;
 import io.strimzi.api.kafka.model.KafkaListenerAuthenticationTls;
 import io.strimzi.api.kafka.model.PersistentClaimStorage;
 import io.strimzi.api.kafka.model.PersistentClaimStorageBuilder;
+import io.strimzi.api.kafka.model.ProbeBuilder;
 import io.strimzi.api.kafka.model.Rack;
+import io.strimzi.api.kafka.model.TlsSidecar;
+import io.strimzi.api.kafka.model.TlsSidecarBuilder;
 import io.strimzi.api.kafka.model.TlsSidecarLogLevel;
 import io.strimzi.certs.OpenSslCertManager;
 import io.strimzi.operator.cluster.ResourceUtils;
@@ -35,6 +38,7 @@ import org.junit.Rule;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.io.StringReader;
 import java.security.cert.CertificateParsingException;
 import java.security.cert.X509Certificate;
 import java.util.Collections;
@@ -57,12 +61,17 @@ import static org.junit.Assert.assertTrue;
 
 public class KafkaClusterTest {
 
+    private static final KafkaVersion.Lookup VERSIONS = new KafkaVersion.Lookup(new StringReader(
+            "2.0.0 default 2.0 2.0 1234567890abcdef"),
+            singletonMap("2.0.0", "strimzi/kafka:latest-kafka-2.0.0"), emptyMap(), emptyMap(), emptyMap()) { };
     private final String namespace = "test";
     private final String cluster = "foo";
     private final int replicas = 3;
     private final String image = "image";
     private final int healthDelay = 120;
     private final int healthTimeout = 30;
+    private final int tlsHealthDelay = 120;
+    private final int tlsHealthTimeout = 30;
     private final Map<String, Object> metricsCm = singletonMap("animal", "wombat");
     private final Map<String, Object> configuration = singletonMap("foo", "bar");
     private final InlineLogging kafkaLog = new InlineLogging();
@@ -72,11 +81,23 @@ public class KafkaClusterTest {
         zooLog.setLoggers(Collections.singletonMap("zookeeper.root.logger", "OFF"));
     }
 
-    private final Kafka kafkaAssembly = ResourceUtils.createKafkaCluster(namespace, cluster, replicas, image, healthDelay, healthTimeout, metricsCm, configuration, kafkaLog, zooLog);
-    private final KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+    private final TlsSidecar tlsSidecar = new TlsSidecarBuilder()
+            .withLivenessProbe(new ProbeBuilder().withInitialDelaySeconds(tlsHealthDelay).withTimeoutSeconds(tlsHealthTimeout).build())
+            .withReadinessProbe(new ProbeBuilder().withInitialDelaySeconds(tlsHealthDelay).withTimeoutSeconds(tlsHealthTimeout).build())
+            .build();
+
+    private final Kafka kafkaAssembly = new KafkaBuilder(ResourceUtils.createKafkaCluster(namespace, cluster, replicas, image, healthDelay, healthTimeout, metricsCm, configuration, kafkaLog, zooLog))
+            .editSpec()
+                .editKafka()
+                    .withTlsSidecar(tlsSidecar)
+                .endKafka()
+            .endSpec()
+            .build();
+
+    private final KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly, VERSIONS);
 
     @Rule
-    public ResourceTester<Kafka, KafkaCluster> resourceTester = new ResourceTester<>(Kafka.class, KafkaCluster::fromCrd);
+    public ResourceTester<Kafka, KafkaCluster> resourceTester = new ResourceTester<>(Kafka.class, VERSIONS, KafkaCluster::fromCrd);
 
     @Test
     public void testMetricsConfigMap() {
@@ -166,7 +187,7 @@ public class KafkaClusterTest {
                 .endKafka()
                 .endSpec()
                 .build();
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly, VERSIONS);
         StatefulSet ss = kc.generateStatefulSet(false);
         assertEquals(selector, ss.getSpec().getVolumeClaimTemplates().get(0).getSpec().getSelector().getMatchLabels());
     }
@@ -181,40 +202,38 @@ public class KafkaClusterTest {
                 .endKafka()
                 .endSpec()
                 .build();
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly, VERSIONS);
         StatefulSet ss = kc.generateStatefulSet(false);
         assertEquals(null, ss.getSpec().getVolumeClaimTemplates().get(0).getSpec().getSelector());
     }
 
     @Test
     public void testGenerateStatefulSetWithRack() {
-        Kafka kafkaAssembly = new KafkaBuilder(ResourceUtils.createKafkaCluster(namespace, cluster, replicas,
-                image, healthDelay, healthTimeout, metricsCm, configuration, emptyMap()))
+        Kafka editKafkaAssembly = new KafkaBuilder(kafkaAssembly)
                 .editSpec()
                     .editKafka()
                         .withNewRack().withTopologyKey("rack-key").endRack()
                     .endKafka()
                 .endSpec()
                 .build();
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(editKafkaAssembly, VERSIONS);
         StatefulSet ss = kc.generateStatefulSet(true);
-        checkStatefulSet(ss, kafkaAssembly, true);
+        checkStatefulSet(ss, editKafkaAssembly, true);
     }
 
     @Test
     public void testGenerateStatefulSetWithInitContainers() {
-        Kafka kafkaAssembly =
-                new KafkaBuilder(ResourceUtils.createKafkaCluster(namespace, cluster, replicas, image, healthDelay, healthTimeout,
-                        metricsCm, configuration, emptyMap()))
+        Kafka editKafkaAssembly =
+                new KafkaBuilder(kafkaAssembly)
                         .editSpec()
                             .editKafka()
                                 .withNewPersistentClaimStorageStorage().withSize("1Gi").endPersistentClaimStorageStorage()
                                 .withNewRack().withTopologyKey("rack-key").endRack()
                             .endKafka()
                         .endSpec().build();
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(editKafkaAssembly, VERSIONS);
         StatefulSet ss = kc.generateStatefulSet(false);
-        checkStatefulSet(ss, kafkaAssembly, false);
+        checkStatefulSet(ss, editKafkaAssembly, false);
     }
 
     private void checkStatefulSet(StatefulSet ss, Kafka cm, boolean isOpenShift) {
@@ -244,12 +263,17 @@ public class KafkaClusterTest {
         assertEquals(KafkaCluster.CLIENT_CA_CERTS_VOLUME, containers.get(0).getVolumeMounts().get(3).getName());
         assertEquals(KafkaCluster.CLIENT_CA_CERTS_VOLUME_MOUNT, containers.get(0).getVolumeMounts().get(3).getMountPath());
         // checks on the TLS sidecar
-        assertEquals(KafkaClusterSpec.DEFAULT_TLS_SIDECAR_IMAGE, containers.get(1).getImage());
-        assertEquals(ZookeeperCluster.serviceName(cluster) + ":2181", AbstractModel.containerEnvVars(containers.get(1)).get(KafkaCluster.ENV_VAR_KAFKA_ZOOKEEPER_CONNECT));
-        assertEquals(TlsSidecarLogLevel.NOTICE.toValue(), AbstractModel.containerEnvVars(containers.get(1)).get(KafkaCluster.ENV_VAR_TLS_SIDECAR_LOG_LEVEL));
-        assertEquals(KafkaCluster.BROKER_CERTS_VOLUME, containers.get(1).getVolumeMounts().get(0).getName());
-        assertEquals(KafkaCluster.TLS_SIDECAR_KAFKA_CERTS_VOLUME_MOUNT, containers.get(1).getVolumeMounts().get(0).getMountPath());
-        assertEquals(KafkaCluster.TLS_SIDECAR_CLUSTER_CA_CERTS_VOLUME_MOUNT, containers.get(1).getVolumeMounts().get(1).getMountPath());
+        Container tlsSidecarContainer = containers.get(1);
+        assertEquals(KafkaClusterSpec.DEFAULT_TLS_SIDECAR_IMAGE, tlsSidecarContainer.getImage());
+        assertEquals(ZookeeperCluster.serviceName(cluster) + ":2181", AbstractModel.containerEnvVars(tlsSidecarContainer).get(KafkaCluster.ENV_VAR_KAFKA_ZOOKEEPER_CONNECT));
+        assertEquals(TlsSidecarLogLevel.NOTICE.toValue(), AbstractModel.containerEnvVars(tlsSidecarContainer).get(ModelUtils.TLS_SIDECAR_LOG_LEVEL));
+        assertEquals(KafkaCluster.BROKER_CERTS_VOLUME, tlsSidecarContainer.getVolumeMounts().get(0).getName());
+        assertEquals(KafkaCluster.TLS_SIDECAR_KAFKA_CERTS_VOLUME_MOUNT, tlsSidecarContainer.getVolumeMounts().get(0).getMountPath());
+        assertEquals(KafkaCluster.TLS_SIDECAR_CLUSTER_CA_CERTS_VOLUME_MOUNT, tlsSidecarContainer.getVolumeMounts().get(1).getMountPath());
+        assertEquals(new Integer(tlsHealthDelay), tlsSidecarContainer.getReadinessProbe().getInitialDelaySeconds());
+        assertEquals(new Integer(tlsHealthTimeout), tlsSidecarContainer.getReadinessProbe().getTimeoutSeconds());
+        assertEquals(new Integer(tlsHealthDelay), tlsSidecarContainer.getLivenessProbe().getInitialDelaySeconds());
+        assertEquals(new Integer(tlsHealthTimeout), tlsSidecarContainer.getLivenessProbe().getTimeoutSeconds());
 
         if (cm.getSpec().getKafka().getStorage() != null) {
             io.strimzi.api.kafka.model.Storage storage = cm.getSpec().getKafka().getStorage();
@@ -297,7 +321,7 @@ public class KafkaClusterTest {
     public void testDeleteClaim() {
         Kafka assembly = ResourceUtils.createKafkaCluster(namespace, cluster, replicas,
                 image, healthDelay, healthTimeout, metricsCm, configuration, emptyMap());
-        KafkaCluster kc = KafkaCluster.fromCrd(assembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(assembly, VERSIONS);
         StatefulSet ss = kc.generateStatefulSet(true);
         assertFalse(KafkaCluster.deleteClaim(ss));
 
@@ -309,7 +333,7 @@ public class KafkaClusterTest {
                     .endKafka()
                 .endSpec()
                 .build();
-        kc = KafkaCluster.fromCrd(assembly);
+        kc = KafkaCluster.fromCrd(assembly, VERSIONS);
         ss = kc.generateStatefulSet(true);
         assertFalse(KafkaCluster.deleteClaim(ss));
 
@@ -321,7 +345,7 @@ public class KafkaClusterTest {
                     .endKafka()
                 .endSpec()
                 .build();
-        kc = KafkaCluster.fromCrd(assembly);
+        kc = KafkaCluster.fromCrd(assembly, VERSIONS);
         ss = kc.generateStatefulSet(true);
         assertTrue(KafkaCluster.deleteClaim(ss));
     }
@@ -395,7 +419,7 @@ public class KafkaClusterTest {
 
         ClusterCa clusterCa = ResourceUtils.createInitialClusterCa(namespace, cluster);
 
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly, VERSIONS);
 
         SortedMap<Integer, String> addresses = new TreeMap<>();
         addresses.put(0, "my-address-0");
@@ -470,7 +494,7 @@ public class KafkaClusterTest {
                 .endSpec()
                 .build();
         ClusterCa clusterCa = ResourceUtils.createInitialClusterCa(namespace, cluster);
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly, VERSIONS);
 
         SortedMap<Integer, String> addresses = new TreeMap<>();
         addresses.put(0, "my-address-0");
@@ -524,7 +548,7 @@ public class KafkaClusterTest {
                 .endSpec()
                 .build();
         ClusterCa clusterCa = ResourceUtils.createInitialClusterCa(namespace, cluster);
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly, VERSIONS);
 
         SortedMap<Integer, String> addresses = new TreeMap<>();
         addresses.put(0, "my-address-0");
@@ -557,7 +581,7 @@ public class KafkaClusterTest {
                 .endSpec()
                 .build();
         ClusterCa clusterCa = ResourceUtils.createInitialClusterCa(namespace, cluster);
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly, VERSIONS);
 
         SortedMap<Integer, String> addresses = new TreeMap<>();
         addresses.put(0, "32123");
@@ -611,7 +635,7 @@ public class KafkaClusterTest {
                 .endSpec()
                 .build();
         ClusterCa clusterCa = ResourceUtils.createInitialClusterCa(namespace, cluster);
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly, VERSIONS);
 
         SortedMap<Integer, String> addresses = new TreeMap<>();
         addresses.put(0, "32123");
@@ -647,6 +671,7 @@ public class KafkaClusterTest {
                 asList(2, "foo-kafka-0.foo-kafka-brokers.test.svc.cluster.local"),
                 asList(2, "foo-kafka-bootstrap"),
                 asList(2, "foo-kafka-bootstrap.test"),
+                asList(2, "foo-kafka-bootstrap.test.svc"),
                 asList(2, "foo-kafka-bootstrap.test.svc.cluster.local")),
                 new HashSet<Object>(cert.getSubjectAlternativeNames()));
 
@@ -671,6 +696,7 @@ public class KafkaClusterTest {
                 asList(2, "foo-kafka-0.foo-kafka-brokers.test.svc.cluster.local"),
                 asList(2, "foo-kafka-bootstrap"),
                 asList(2, "foo-kafka-bootstrap.test"),
+                asList(2, "foo-kafka-bootstrap.test.svc"),
                 asList(2, "foo-kafka-bootstrap.test.svc.cluster.local"),
                 asList(7, "123.10.125.140"),
                 asList(7, "123.10.125.130")),
@@ -772,7 +798,7 @@ public class KafkaClusterTest {
                     .endKafka()
                 .endSpec()
                 .build();
-        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly);
+        KafkaCluster kc = KafkaCluster.fromCrd(kafkaAssembly, VERSIONS);
 
         // Check StatefulSet
         StatefulSet ss = kc.generateStatefulSet(true);

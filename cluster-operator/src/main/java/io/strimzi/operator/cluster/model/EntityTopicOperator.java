@@ -52,7 +52,7 @@ public class EntityTopicOperator extends AbstractModel {
     private String watchedNamespace;
     private int reconciliationIntervalMs;
     private int zookeeperSessionTimeoutMs;
-    private String topicConfigMapLabels;
+    private String resourceLabels;
     private int topicMetadataMaxAttempts;
 
     /**
@@ -77,12 +77,12 @@ public class EntityTopicOperator extends AbstractModel {
         this.watchedNamespace = namespace;
         this.reconciliationIntervalMs = EntityTopicOperatorSpec.DEFAULT_FULL_RECONCILIATION_INTERVAL_SECONDS * 1_000;
         this.zookeeperSessionTimeoutMs = EntityTopicOperatorSpec.DEFAULT_ZOOKEEPER_SESSION_TIMEOUT_SECONDS * 1_000;
-        this.topicConfigMapLabels = defaultTopicConfigMapLabels(cluster);
+        this.resourceLabels = ModelUtils.defaultResourceLabels(cluster);
         this.topicMetadataMaxAttempts = EntityTopicOperatorSpec.DEFAULT_TOPIC_METADATA_MAX_ATTEMPTS;
 
         this.ancillaryConfigName = metricAndLogConfigsName(cluster);
         this.logAndMetricsConfigVolumeName = "entity-topic-operator-metrics-and-logging";
-        this.logAndMetricsConfigMountPath = "/opt/entity-topic-operator/custom-config/";
+        this.logAndMetricsConfigMountPath = "/opt/topic-operator/custom-config/";
         this.validLoggerFields = getDefaultLogConfig();
     }
 
@@ -94,12 +94,12 @@ public class EntityTopicOperator extends AbstractModel {
         return watchedNamespace;
     }
 
-    public void setTopicConfigMapLabels(String topicConfigMapLabels) {
-        this.topicConfigMapLabels = topicConfigMapLabels;
+    public void setResourceLabels(String resourceLabels) {
+        this.resourceLabels = resourceLabels;
     }
 
-    public String getTopicConfigMapLabels() {
-        return topicConfigMapLabels;
+    public String getResourceLabels() {
+        return resourceLabels;
     }
 
     public void setReconciliationIntervalMs(int reconciliationIntervalMs) {
@@ -150,11 +150,6 @@ public class EntityTopicOperator extends AbstractModel {
         return KafkaCluster.serviceName(cluster) + ":" + EntityTopicOperatorSpec.DEFAULT_BOOTSTRAP_SERVERS_PORT;
     }
 
-    protected static String defaultTopicConfigMapLabels(String cluster) {
-        return String.format("%s=%s",
-                Labels.STRIMZI_CLUSTER_LABEL, cluster);
-    }
-
     public static String topicOperatorName(String cluster) {
         return cluster + NAME_SUFFIX;
     }
@@ -178,6 +173,11 @@ public class EntityTopicOperator extends AbstractModel {
     @Override
     String getAncillaryConfigMapKeyLogConfig() {
         return "log4j2.properties";
+    }
+
+    @Override
+    public String getGcLoggingOptions() {
+        return gcLoggingDisabled ? " " : DEFAULT_STRIMZI_GC_LOGGING;
     }
 
     /**
@@ -207,6 +207,7 @@ public class EntityTopicOperator extends AbstractModel {
                 result.setZookeeperSessionTimeoutMs(topicOperatorSpec.getZookeeperSessionTimeoutSeconds() * 1_000);
                 result.setTopicMetadataMaxAttempts(topicOperatorSpec.getTopicMetadataMaxAttempts());
                 result.setLogging(topicOperatorSpec.getLogging());
+                result.setGcLoggingDisabled(topicOperatorSpec.getJvmOptions() == null ? false : topicOperatorSpec.getJvmOptions().isGcLoggingDisabled());
                 result.setResources(topicOperatorSpec.getResources());
             }
         }
@@ -223,7 +224,7 @@ public class EntityTopicOperator extends AbstractModel {
                 .withPorts(singletonList(createContainerPort(HEALTHCHECK_PORT_NAME, HEALTHCHECK_PORT, "TCP")))
                 .withLivenessProbe(createHttpProbe(livenessPath + "healthy", HEALTHCHECK_PORT_NAME, livenessInitialDelay, livenessTimeout))
                 .withReadinessProbe(createHttpProbe(readinessPath + "ready", HEALTHCHECK_PORT_NAME, readinessInitialDelay, readinessTimeout))
-                .withResources(resources(getResources()))
+                .withResources(ModelUtils.resources(getResources()))
                 .withVolumeMounts(getVolumeMounts())
                 .build());
     }
@@ -231,7 +232,7 @@ public class EntityTopicOperator extends AbstractModel {
     @Override
     protected List<EnvVar> getEnvVars() {
         List<EnvVar> varList = new ArrayList<>();
-        varList.add(buildEnvVar(ENV_VAR_RESOURCE_LABELS, topicConfigMapLabels));
+        varList.add(buildEnvVar(ENV_VAR_RESOURCE_LABELS, resourceLabels));
         varList.add(buildEnvVar(ENV_VAR_KAFKA_BOOTSTRAP_SERVERS, kafkaBootstrapServers));
         varList.add(buildEnvVar(ENV_VAR_ZOOKEEPER_CONNECT, zookeeperConnect));
         varList.add(buildEnvVar(ENV_VAR_WATCHED_NAMESPACE, watchedNamespace));
@@ -239,6 +240,7 @@ public class EntityTopicOperator extends AbstractModel {
         varList.add(buildEnvVar(ENV_VAR_ZOOKEEPER_SESSION_TIMEOUT_MS, Integer.toString(zookeeperSessionTimeoutMs)));
         varList.add(buildEnvVar(ENV_VAR_TOPIC_METADATA_MAX_ATTEMPTS, String.valueOf(topicMetadataMaxAttempts)));
         varList.add(buildEnvVar(ENV_VAR_TLS_ENABLED, Boolean.toString(true)));
+        varList.add(buildEnvVar(ENV_VAR_STRIMZI_GC_LOG_OPTS, getGcLoggingOptions()));
         return varList;
     }
 

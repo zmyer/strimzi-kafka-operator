@@ -48,7 +48,7 @@ Used in: xref:type-KafkaSpec-{context}[`KafkaSpec`]
 |Field                       |Description
 |replicas             1.2+<.<|The number of pods in the cluster.
 |integer
-|image                1.2+<.<|The docker image for the pods.
+|image                1.2+<.<|The docker image for the pods. The default value depends on the configured `Kafka.spec.kafka.version`.
 |string
 |storage              1.2+<.<|Storage configuration (disk). Cannot be updated. The type depends on the value of the `storage.type` property within the given object, which must be one of [ephemeral, persistent-claim].
 |xref:type-EphemeralStorage-{context}[`EphemeralStorage`], xref:type-PersistentClaimStorage-{context}[`PersistentClaimStorage`]
@@ -86,6 +86,8 @@ Used in: xref:type-KafkaSpec-{context}[`KafkaSpec`]
 |xref:type-TlsSidecar-{context}[`TlsSidecar`]
 |template             1.2+<.<|Template for Kafka cluster resources. The template allows users to specify how are the `StatefulSet`, `Pods` and `Services` generated.
 |xref:type-KafkaClusterTemplate-{context}[`KafkaClusterTemplate`]
+|version              1.2+<.<|The kafka broker version. Defaults to {DefaultKafkaVersion}. Consult the user documentation to understand the process required to upgrade or downgrade the version.
+|string
 |====
 
 [id='type-EphemeralStorage-{context}']
@@ -287,7 +289,7 @@ Used in: xref:type-KafkaClusterSpec-{context}[`KafkaClusterSpec`]
 [id='type-Probe-{context}']
 ### `Probe` schema reference
 
-Used in: xref:type-KafkaClusterSpec-{context}[`KafkaClusterSpec`], xref:type-KafkaConnectS2ISpec-{context}[`KafkaConnectS2ISpec`], xref:type-KafkaConnectSpec-{context}[`KafkaConnectSpec`], xref:type-ZookeeperClusterSpec-{context}[`ZookeeperClusterSpec`]
+Used in: xref:type-KafkaClusterSpec-{context}[`KafkaClusterSpec`], xref:type-KafkaConnectS2ISpec-{context}[`KafkaConnectS2ISpec`], xref:type-KafkaConnectSpec-{context}[`KafkaConnectSpec`], xref:type-TlsSidecar-{context}[`TlsSidecar`], xref:type-ZookeeperClusterSpec-{context}[`ZookeeperClusterSpec`]
 
 
 [options="header"]
@@ -307,13 +309,15 @@ Used in: xref:type-KafkaClusterSpec-{context}[`KafkaClusterSpec`], xref:type-Kaf
 
 [options="header"]
 |====
-|Field        |Description
-|-XX   1.2+<.<|A map of -XX options to the JVM.
+|Field                     |Description
+|-XX                1.2+<.<|A map of -XX options to the JVM.
 |map
-|-Xms  1.2+<.<|-Xms option to to the JVM.
+|-Xms               1.2+<.<|-Xms option to to the JVM.
 |string
-|-Xmx  1.2+<.<|-Xmx option to to the JVM.
+|-Xmx               1.2+<.<|-Xmx option to to the JVM.
 |string
+|gcLoggingDisabled  1.2+<.<|Disable garbage collection logging.
+|boolean
 |====
 
 [id='type-Resources-{context}']
@@ -388,12 +392,16 @@ Used in: xref:type-EntityOperatorSpec-{context}[`EntityOperatorSpec`], xref:type
 
 [options="header"]
 |====
-|Field             |Description
-|image      1.2+<.<|The docker image for the container.
+|Field                  |Description
+|image           1.2+<.<|The docker image for the container.
 |string
-|logLevel   1.2+<.<|The log level for the TLS sidecar. Default value is `notice`.
+|livenessProbe   1.2+<.<|Pod liveness checking.
+|xref:type-Probe-{context}[`Probe`]
+|logLevel        1.2+<.<|The log level for the TLS sidecar. Default value is `notice`.
 |string (one of [emerg, debug, crit, err, alert, warning, notice, info])
-|resources  1.2+<.<|Resource constraints (limits and requests).
+|readinessProbe  1.2+<.<|Pod readiness checking.
+|xref:type-Probe-{context}[`Probe`]
+|resources       1.2+<.<|Resource constraints (limits and requests).
 |xref:type-Resources-{context}[`Resources`]
 |====
 
@@ -526,6 +534,21 @@ Used in: xref:type-KafkaSpec-{context}[`KafkaSpec`]
 |xref:type-TlsSidecar-{context}[`TlsSidecar`]
 |logging                         1.2+<.<|Logging configuration. The type depends on the value of the `logging.type` property within the given object, which must be one of [inline, external].
 |xref:type-InlineLogging-{context}[`InlineLogging`], xref:type-ExternalLogging-{context}[`ExternalLogging`]
+|jvmOptions                      1.2+<.<|JVM Options for pods.
+|xref:type-EntityOperatorJvmOptions-{context}[`EntityOperatorJvmOptions`]
+|====
+
+[id='type-EntityOperatorJvmOptions-{context}']
+### `EntityOperatorJvmOptions` schema reference
+
+Used in: xref:type-EntityTopicOperatorSpec-{context}[`EntityTopicOperatorSpec`], xref:type-EntityUserOperatorSpec-{context}[`EntityUserOperatorSpec`], xref:type-TopicOperatorSpec-{context}[`TopicOperatorSpec`]
+
+
+[options="header"]
+|====
+|Field                     |Description
+|gcLoggingDisabled  1.2+<.<|Disable garbage collection logging.
+|boolean
 |====
 
 [id='type-EntityOperatorSpec-{context}']
@@ -578,6 +601,8 @@ Used in: xref:type-EntityOperatorSpec-{context}[`EntityOperatorSpec`]
 |integer
 |logging                         1.2+<.<|Logging configuration. The type depends on the value of the `logging.type` property within the given object, which must be one of [inline, external].
 |xref:type-InlineLogging-{context}[`InlineLogging`], xref:type-ExternalLogging-{context}[`ExternalLogging`]
+|jvmOptions                      1.2+<.<|JVM Options for pods.
+|xref:type-EntityOperatorJvmOptions-{context}[`EntityOperatorJvmOptions`]
 |====
 
 [id='type-EntityUserOperatorSpec-{context}']
@@ -601,6 +626,8 @@ Used in: xref:type-EntityOperatorSpec-{context}[`EntityOperatorSpec`]
 |xref:type-Resources-{context}[`Resources`]
 |logging                         1.2+<.<|Logging configuration. The type depends on the value of the `logging.type` property within the given object, which must be one of [inline, external].
 |xref:type-InlineLogging-{context}[`InlineLogging`], xref:type-ExternalLogging-{context}[`ExternalLogging`]
+|jvmOptions                      1.2+<.<|JVM Options for pods.
+|xref:type-EntityOperatorJvmOptions-{context}[`EntityOperatorJvmOptions`]
 |====
 
 [id='type-EntityOperatorTemplate-{context}']
@@ -690,6 +717,8 @@ Used in: xref:type-KafkaConnect-{context}[`KafkaConnect`]
 |xref:type-Resources-{context}[`Resources`]
 |tls               1.2+<.<|TLS configuration.
 |xref:type-KafkaConnectTls-{context}[`KafkaConnectTls`]
+|version           1.2+<.<|The Kafka Connect version. Defaults to {DefaultKafkaVersion}. Consult the user documentation to understand the process required to upgrade or downgrade the version.
+|string
 |====
 
 [id='type-KafkaConnectTemplate-{context}']
@@ -839,6 +868,8 @@ Used in: xref:type-KafkaConnectS2I-{context}[`KafkaConnectS2I`]
 
 
 |https://v1-9.docs.kubernetes.io/docs/reference/generated/kubernetes-api/v1.9/#affinity-v1-core[Affinity]
+|logging                   1.2+<.<|Logging configuration for Kafka Connect. The type depends on the value of the `logging.type` property within the given object, which must be one of [inline, external].
+|xref:type-InlineLogging-{context}[`InlineLogging`], xref:type-ExternalLogging-{context}[`ExternalLogging`]
 |metrics                   1.2+<.<|The Prometheus JMX Exporter configuration. See https://github.com/prometheus/jmx_exporter for details of the structure of this configuration.
 |map
 |template                  1.2+<.<|Template for Kafka Connect and Kafka Connect S2I resources. The template allows users to specify how is the `Deployment`, `Pods` and `Service` generated.
@@ -851,8 +882,6 @@ Used in: xref:type-KafkaConnectS2I-{context}[`KafkaConnectS2I`]
 |map
 |insecureSourceRepository  1.2+<.<|When true this configures the source repository with the 'Local' reference policy and an import policy that accepts insecure source tags.
 |boolean
-|logging                   1.2+<.<|Logging configuration for Kafka Connect. The type depends on the value of the `logging.type` property within the given object, which must be one of [inline, external].
-|xref:type-InlineLogging-{context}[`InlineLogging`], xref:type-ExternalLogging-{context}[`ExternalLogging`]
 |resources                 1.2+<.<|Resource constraints (limits and requests).
 |xref:type-Resources-{context}[`Resources`]
 |tls                       1.2+<.<|TLS configuration.
@@ -861,6 +890,8 @@ Used in: xref:type-KafkaConnectS2I-{context}[`KafkaConnectS2I`]
 
 
 |https://v1-9.docs.kubernetes.io/docs/reference/generated/kubernetes-api/v1.9/#tolerations-v1-core[Toleration] array
+|version                   1.2+<.<|The Kafka Connect version. Defaults to {DefaultKafkaVersion}. Consult the user documentation to understand the process required to upgrade or downgrade the version.
+|string
 |====
 
 [id='type-KafkaTopic-{context}']
@@ -979,8 +1010,8 @@ Used in: xref:type-KafkaUserAuthorizationSimple-{context}[`KafkaUserAuthorizatio
 |string
 |operation  1.2+<.<|Operation which will be allowed or denied. Supported operations are: Read, Write, Create, Delete, Alter, Describe, ClusterAction, AlterConfigs, DescribeConfigs, IdempotentWrite and All.
 |string (one of [Read, Write, Delete, Alter, Describe, All, IdempotentWrite, ClusterAction, Create, AlterConfigs, DescribeConfigs])
-|resource   1.2+<.<|Indicates the resource for which given ACL rule applies. The type depends on the value of the `resource.type` property within the given object, which must be one of [topic, group, cluster].
-|xref:type-AclRuleTopicResource-{context}[`AclRuleTopicResource`], xref:type-AclRuleGroupResource-{context}[`AclRuleGroupResource`], xref:type-AclRuleClusterResource-{context}[`AclRuleClusterResource`]
+|resource   1.2+<.<|Indicates the resource for which given ACL rule applies. The type depends on the value of the `resource.type` property within the given object, which must be one of [topic, group, cluster, transactionalId].
+|xref:type-AclRuleTopicResource-{context}[`AclRuleTopicResource`], xref:type-AclRuleGroupResource-{context}[`AclRuleGroupResource`], xref:type-AclRuleClusterResource-{context}[`AclRuleClusterResource`], xref:type-AclRuleTransactionalIdResource-{context}[`AclRuleTransactionalIdResource`]
 |type       1.2+<.<|The type of the rule. Currently the only supported type is `allow`. ACL rules with type `allow` are used to allow user to execute the specified operations. Default value is `allow`.
 |string (one of [allow, deny])
 |====
@@ -991,7 +1022,7 @@ Used in: xref:type-KafkaUserAuthorizationSimple-{context}[`KafkaUserAuthorizatio
 Used in: xref:type-AclRule-{context}[`AclRule`]
 
 
-The `type` property is a discriminator that distinguishes the use of the type `AclRuleTopicResource` from xref:type-AclRuleGroupResource-{context}[`AclRuleGroupResource`], xref:type-AclRuleClusterResource-{context}[`AclRuleClusterResource`].
+The `type` property is a discriminator that distinguishes the use of the type `AclRuleTopicResource` from xref:type-AclRuleGroupResource-{context}[`AclRuleGroupResource`], xref:type-AclRuleClusterResource-{context}[`AclRuleClusterResource`], xref:type-AclRuleTransactionalIdResource-{context}[`AclRuleTransactionalIdResource`].
 It must have the value `topic` for the type `AclRuleTopicResource`.
 [options="header"]
 |====
@@ -1010,7 +1041,7 @@ It must have the value `topic` for the type `AclRuleTopicResource`.
 Used in: xref:type-AclRule-{context}[`AclRule`]
 
 
-The `type` property is a discriminator that distinguishes the use of the type `AclRuleGroupResource` from xref:type-AclRuleTopicResource-{context}[`AclRuleTopicResource`], xref:type-AclRuleClusterResource-{context}[`AclRuleClusterResource`].
+The `type` property is a discriminator that distinguishes the use of the type `AclRuleGroupResource` from xref:type-AclRuleTopicResource-{context}[`AclRuleTopicResource`], xref:type-AclRuleClusterResource-{context}[`AclRuleClusterResource`], xref:type-AclRuleTransactionalIdResource-{context}[`AclRuleTransactionalIdResource`].
 It must have the value `group` for the type `AclRuleGroupResource`.
 [options="header"]
 |====
@@ -1029,13 +1060,32 @@ It must have the value `group` for the type `AclRuleGroupResource`.
 Used in: xref:type-AclRule-{context}[`AclRule`]
 
 
-The `type` property is a discriminator that distinguishes the use of the type `AclRuleClusterResource` from xref:type-AclRuleTopicResource-{context}[`AclRuleTopicResource`], xref:type-AclRuleGroupResource-{context}[`AclRuleGroupResource`].
+The `type` property is a discriminator that distinguishes the use of the type `AclRuleClusterResource` from xref:type-AclRuleTopicResource-{context}[`AclRuleTopicResource`], xref:type-AclRuleGroupResource-{context}[`AclRuleGroupResource`], xref:type-AclRuleTransactionalIdResource-{context}[`AclRuleTransactionalIdResource`].
 It must have the value `cluster` for the type `AclRuleClusterResource`.
 [options="header"]
 |====
 |Field        |Description
 |type  1.2+<.<|Must be `cluster`.
 |string
+|====
+
+[id='type-AclRuleTransactionalIdResource-{context}']
+### `AclRuleTransactionalIdResource` schema reference
+
+Used in: xref:type-AclRule-{context}[`AclRule`]
+
+
+The `type` property is a discriminator that distinguishes the use of the type `AclRuleTransactionalIdResource` from xref:type-AclRuleTopicResource-{context}[`AclRuleTopicResource`], xref:type-AclRuleGroupResource-{context}[`AclRuleGroupResource`], xref:type-AclRuleClusterResource-{context}[`AclRuleClusterResource`].
+It must have the value `transactionalId` for the type `AclRuleTransactionalIdResource`.
+[options="header"]
+|====
+|Field               |Description
+|type         1.2+<.<|Must be `transactionalId`.
+|string
+|name         1.2+<.<|Name of resource for which given ACL rule applies. Can be combined with `patternType` field to use prefix pattern.
+|string
+|patternType  1.2+<.<|Describes the pattern used in the resource field. The supported types are `literal` and `prefix`. With `literal` pattern type, the resource field will be used as a definition of a full name. With `prefix` pattern type, the resource name will be used only as a prefix. Default value is `literal`.
+|string (one of [prefix, literal])
 |====
 
 [id='type-KafkaMirrorMaker-{context}']
@@ -1086,6 +1136,8 @@ Used in: xref:type-KafkaMirrorMaker-{context}[`KafkaMirrorMaker`]
 |map
 |template     1.2+<.<|Template for Kafka Mirror Maker resources. The template allows users to specify how is the `Deployment` and `Pods` generated.
 |xref:type-KafkaMirrorMakerTemplate-{context}[`KafkaMirrorMakerTemplate`]
+|version      1.2+<.<|The Kafka Mirror Maker version. Defaults to {DefaultKafkaVersion}. Consult the user documentation to understand the process required to upgrade or downgrade the version.
+|string
 |====
 
 [id='type-KafkaMirrorMakerConsumerSpec-{context}']

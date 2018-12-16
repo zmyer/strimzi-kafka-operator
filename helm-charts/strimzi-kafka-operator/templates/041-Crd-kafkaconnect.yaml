@@ -58,6 +58,8 @@ spec:
                 -Xmx:
                   type: string
                   pattern: '[0-9]+[mMgG]?'
+                gcLoggingDisabled:
+                  type: boolean
             affinity:
               type: object
               properties:
@@ -360,5 +362,7 @@ spec:
                     - secretName
               required:
               - trustedCertificates
+            version:
+              type: string
           required:
           - bootstrapServers
